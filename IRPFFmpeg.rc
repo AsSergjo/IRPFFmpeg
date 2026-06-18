@@ -1,0 +1,267 @@
+// Microsoft Visual C++ generated resource script.
+//
+#pragma code_page(65001)
+
+#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#include "afxres.h"
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// Русский (Россия) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_RUS)
+LANGUAGE LANG_RUSSIAN, SUBLANG_DEFAULT
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems.
+IDI_IRPFFMPEG           ICON                    "app.ico"
+
+IDI_SMALL               ICON                    "small.ico"
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x3L
+#else
+ FILEFLAGS 0x2L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "IRPFFmpeg"
+            VALUE "FileDescription", "IRPFFmpeg internet radio player"
+            VALUE "FileVersion", "0.1.0.0 beta 1"
+            VALUE "InternalName", "IRPFFmpeg"
+            VALUE "OriginalFilename", "IRPFFmpeg.exe"
+            VALUE "ProductName", "IRPFFmpeg"
+            VALUE "ProductVersion", "0.1.0.0 beta 1"
+            VALUE "LegalCopyright", "Copyright (c) 2026"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Menu
+//
+
+IDC_IRPFFMPEG MENU
+BEGIN
+    POPUP "&Файл"
+    BEGIN
+        MENUITEM "Вы&ход",                      IDM_EXIT
+    END
+    POPUP "&Справка"
+    BEGIN
+        MENUITEM "&О программе...",             IDM_ABOUT
+    END
+END
+
+IDR_CONTEXT_MENU MENU
+BEGIN
+    POPUP ""
+    BEGIN
+        MENUITEM "Copy",                        ID_LISTBOX_COPY
+    END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Accelerator
+//
+
+IDC_IRPFFMPEG ACCELERATORS
+BEGIN
+    "?",            IDM_ABOUT,              ASCII,  ALT
+    "/",            IDM_ABOUT,              ASCII,  ALT
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog
+//
+
+IDD_ABOUTBOX DIALOGEX 0, 0, 170, 62
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CLIPCHILDREN | WS_CAPTION | WS_SYSMENU
+CAPTION "IRP+ffmpeG"
+FONT 8, "MS Shell Dlg", 0, 0, 0x1
+BEGIN
+    ICON            IDI_IRPFFMPEG,IDC_STATIC,14,14,21,20
+    LTEXT           "IRP+ffmpeG, 1.0",IDC_STATIC,42,14,114,8,SS_NOPREFIX
+    LTEXT           "(c) 2026",IDC_STATIC,42,26,114,8
+    DEFPUSHBUTTON   "OK",IDOK,99,41,50,14
+END
+
+IDD_MAIN_DIALOG DIALOGEX 0, 0, 661, 313
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_MINIMIZEBOX | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "IRP+ffmpeG"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    CONTROL         "",IDC_STATIC_IMG,"Static",SS_OWNERDRAW | WS_BORDER,4,4,299,276
+    CTEXT           "",IDC_STATIC_SDL,306,4,351,96,NOT WS_GROUP
+    CONTROL         "",IDC_LIST_URL,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP,306,103,351,80,WS_EX_TRANSPARENT
+    CONTROL         "",IDC_STATIC_NOW_PLAYING_BAR,"Static",SS_OWNERDRAW,306,183,351,16
+    LISTBOX         IDC_LIST2,306,199,351,81,LBS_OWNERDRAWFIXED | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP
+    CONTROL         "",IDC_BUTTON_PP,"Button",BS_OWNERDRAW | WS_TABSTOP,466,285,36,24
+    CONTROL         "",IDC_BUTTON_REV,"Button",BS_OWNERDRAW | WS_TABSTOP,426,285,36,24
+    CONTROL         "",IDC_BUTTON_FORV,"Button",BS_OWNERDRAW | WS_TABSTOP,506,285,36,24
+    CONTROL         "",IDC_BUTTON_PREVIOUS_STATION,"Button",BS_OWNERDRAW | WS_TABSTOP,546,285,36,24
+    CONTROL         "",IDC_SLIDER_VOL,"msctls_trackbar32",TBS_BOTH | TBS_NOTICKS | WS_TABSTOP,207,285,95,24,WS_EX_TRANSPARENT
+    CONTROL         "",IDC_SLIDER_BASS,"msctls_trackbar32",TBS_BOTH | TBS_NOTICKS | WS_TABSTOP,4,285,95,24,WS_EX_TRANSPARENT
+    CONTROL         "",IDC_SLIDER_HI,"msctls_trackbar32",TBS_BOTH | TBS_NOTICKS | WS_TABSTOP,105,285,95,24,WS_EX_TRANSPARENT
+    CONTROL         "",IDC_BUTTON_REC,"Button",BS_OWNERDRAW | WS_TABSTOP,386,285,36,24
+    LTEXT           "",IDC_ST_SETTING,632,285,24,24,SS_CENTERIMAGE
+END
+
+IDD_DIALOG_SETTING DIALOGEX 0, 0, 255, 184
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+FONT 10, "Segoe UI", 400, 0, 0x1
+BEGIN
+    CTEXT           "Настройки",IDC_SETTINGWND_TITLE,7,0,241,15
+    DEFPUSHBUTTON   "OK",IDOK,99,160,50,14
+    GROUPBOX        " Режимы записи ",IDC_STATIC,7,15,241,28
+    CONTROL         " MP3, LAME, 320 kbit/sec",IDC_CHECK_MP3,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,28,96,10
+    CONTROL         " FLAC, s16, ~1000 kbit/sec",IDC_CHECK_FLAC,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,133,28,96,10
+    GROUPBOX        " Эффекты воспроизведения ",IDC_STATIC,7,46,241,78
+    CONTROL         " Расширение Стерео",IDC_CHECK_STEREO_WIDTH,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,59,116,10
+    EDITTEXT        IDC_EDIT_STEREO_WIDTH,168,60,26,12,ES_CENTER | ES_AUTOHSCROLL | ES_NUMBER | NOT WS_BORDER
+    LTEXT           "%",IDC_STATIC,198,60,8,8
+    CONTROL         " Exciter / Яркость",IDC_CHECK_EXCITER,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,70,120,10
+    CONTROL         " DeepBass / Глубокий Бас",IDC_CHECK_DEEP_BASS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,82,210,10
+    CONTROL         " Динамическая Регулировка Усиления",IDC_CHECK_DYNAMIC_AUTO_VOLUME,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,94,210,10
+    CONTROL         " GainRider / Контроль Пиков",IDC_CHECK_LIMITER_GAIN_RIDER,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,107,210,10
+    GROUPBOX        " Настройки программы ",IDC_STATIC,7,127,241,29
+    CONTROL         " При минимизации отправлять в трей",IDC_CHECK_MINIMIZE_TO_TRAY,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,139,210,10
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// DESIGNINFO
+//
+
+#ifdef APSTUDIO_INVOKED
+GUIDELINES DESIGNINFO
+BEGIN
+    IDD_ABOUTBOX, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 163
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 55
+    END
+
+    IDD_MAIN_DIALOG, DIALOG
+    BEGIN
+        LEFTMARGIN, 4
+        RIGHTMARGIN, 657
+        VERTGUIDE, 198
+        VERTGUIDE, 303
+        VERTGUIDE, 307
+        VERTGUIDE, 483
+        TOPMARGIN, 4
+        BOTTOMMARGIN, 309
+        HORZGUIDE, 280
+        HORZGUIDE, 285
+    END
+
+    IDD_DIALOG_SETTING, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 248
+        VERTGUIDE, 21
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 178
+    END
+END
+#endif    // APSTUDIO_INVOKED
+
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE 
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE 
+BEGIN
+    "#include ""afxres.h""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE 
+BEGIN
+    "\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// String Table
+//
+
+STRINGTABLE
+BEGIN
+    IDS_APP_TITLE           "IRP+ffmpeG"
+    IDC_IRPFFMPEG           "IRPFFMPEG"
+END
+
+#endif    // Русский (Россия) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+

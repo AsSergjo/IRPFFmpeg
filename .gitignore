@@ -1,0 +1,73 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.VC.opendb
+*.aps
+*.ncb
+*.opendb
+*.opensdf
+*.sdf
+*.ipch
+
+# Build output
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+IRPFFmpeg/[Dd]ebug/
+IRPFFmpeg/[Rr]elease/
+IRPFFmpeg/x64/
+IRPFFmpeg/x86/
+Start_IRPFFmpeg/[Dd]ebug/
+Start_IRPFFmpeg/[Rr]elease/
+Start_IRPFFmpeg/x64/
+Start_IRPFFmpeg/x86/
+
+# MSVC/MSBuild intermediates
+*.obj
+*.iobj
+*.ipdb
+*.pdb
+*.ilk
+*.idb
+*.tlog
+*.lastbuildstate
+*.recipe
+*.res
+*.log
+*.FileListAbsolute.txt
+*.Build.CppClean.log
+vcpkg.applocal.log
+
+# Runtime state
+app.dat
+debug_log.txt
+playlist_last.m3u
+playlist_main.m3u
+Rec/
+cover_cache/
+m3us/
+heap_dll/
+screen_shot_*.png
+
+# Packaged binaries and installers
+*.exe
+*.dll
+*.msi
+*.zip
+*.7z
+*.rar
+
+# OS/editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*.tmp
+*.bak
