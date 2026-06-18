@@ -36,6 +36,16 @@ flac
 
 Если отдельного сайта нет, поле Website можно оставить пустым.
 
+## License
+
+Для GitHub выберите:
+
+```text
+MIT License
+```
+
+Это лицензия для исходного кода IRPFFmpeg. В README и `THIRD_PARTY_NOTICES.md` отдельно указано, что FFmpeg DLL распространяются по LGPL/GPL согласно конкретной сборке, а SDL2/SDL2_image - по zlib license.
+
 ## Social preview
 
 Можно использовать скриншот:
@@ -49,4 +59,3 @@ docs/assets/main-window.png
 ```markdown
 IRPFFmpeg is a compact Windows internet radio player. It plays network audio streams through FFmpeg, manages M3U playlists, shows current track metadata, searches for cover art, applies realtime audio processing and records broadcasts to MP3 or FLAC.
 ```
-

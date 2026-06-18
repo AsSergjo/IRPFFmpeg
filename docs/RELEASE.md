@@ -20,6 +20,8 @@
 IRPFFmpeg-vX.Y.Z-win-x64.zip
   Start_IRPFFmpeg.exe
   IRPFFmpeg.exe
+  LICENSE
+  THIRD_PARTY_NOTICES.md
   playlist.m3u
   heap_dll/
     avcodec-62.dll
@@ -34,6 +36,14 @@ IRPFFmpeg-vX.Y.Z-win-x64.zip
     swscale-9.dll
     turbojpeg.dll
     zlib1.dll
+  licenses/
+    FFmpeg-LICENSE.txt
+    FFmpeg-build-configuration.txt
+    SDL2-LICENSE.txt
+    SDL2_image-LICENSE.txt
+    libpng-LICENSE.txt
+    zlib-LICENSE.txt
+    libjpeg-turbo-LICENSE.txt
 ```
 
 Не включайте в архив:
@@ -44,6 +54,20 @@ IRPFFmpeg-vX.Y.Z-win-x64.zip
 - `cover_cache/`;
 - `Rec/`;
 - личные плейлисты, если они не должны быть публичными.
+
+## Лицензии в релизе
+
+Код IRPFFmpeg распространяется под MIT License. Файл `LICENSE` должен быть рядом с приложением.
+
+Сторонние DLL распространяются по своим лицензиям:
+
+- FFmpeg DLL - LGPL/GPL согласно конкретной сборке FFmpeg;
+- SDL2 и SDL2_image - zlib license;
+- libpng, zlib, jpeg/libjpeg-turbo и другие runtime-компоненты - согласно их собственным лицензиям.
+
+Для FFmpeg важно сохранить динамическую линковку через DLL и приложить информацию о конкретной сборке: license text, build configuration и соответствующий source offer/source archive, если публикуется бинарный релиз.
+
+Подробности собраны в `THIRD_PARTY_NOTICES.md`.
 
 ## Текст релиза
 
@@ -65,7 +89,7 @@ IRPFFmpeg-vX.Y.Z-win-x64.zip
 - Windows 10/11 x64.
 
 ### Известные ограничения
-- Лицензия проекта пока не выбрана.
+- Лицензия FFmpeg зависит от конкретной сборки DLL.
 ```
 
 ## Проверка перед публикацией
@@ -77,4 +101,3 @@ IRPFFmpeg-vX.Y.Z-win-x64.zip
 3. Убедитесь, что нет сообщения о недостающих DLL.
 4. Воспроизведите поток.
 5. Закройте приложение и проверьте повторный запуск.
-

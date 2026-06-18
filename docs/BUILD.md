@@ -102,3 +102,10 @@ msbuild IRPFFmpeg.sln /p:Configuration=Release /p:Platform=x64
 
 Проверьте значение `FfmpegBinDir` в `IRPFFmpeg.vcxproj`. Сейчас оно указывает на `D:\Code\ffmpeg-dev\bin`.
 
+## Лицензии зависимостей
+
+Код IRPFFmpeg распространяется под MIT License. Сторонние библиотеки сохраняют свои лицензии.
+
+Особенно внимательно относитесь к FFmpeg: лицензия DLL зависит от параметров сборки. Для LGPL-сценария используйте динамическую линковку через DLL и сборку FFmpeg без `--enable-gpl` и без `--enable-nonfree`.
+
+Для бинарных релизов добавляйте `THIRD_PARTY_NOTICES.md` и license texts для всех DLL.
