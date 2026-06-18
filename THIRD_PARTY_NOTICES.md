@@ -9,7 +9,8 @@ This file is a practical notice for source and binary distribution. It is not le
 ```text
 Component: IRPFFmpeg source code
 License: MIT License
-Notice: See LICENSE.
+Copyright: Copyright (c) 2026 AsSergjo
+Notice: See LICENSE and AUTHORS.md.
 ```
 
 ## FFmpeg
@@ -100,4 +101,3 @@ IRPFFmpeg-vX.Y.Z-win-x64/
     zlib-LICENSE.txt
     libjpeg-turbo-LICENSE.txt
 ```
-
