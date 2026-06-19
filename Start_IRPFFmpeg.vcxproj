@@ -156,14 +156,6 @@
   <ItemGroup>
     <Image Include="app.ico" />
   </ItemGroup>
-  <Target Name="MoveOutputDllsToHeapDll" AfterTargets="Build">
-    <ItemGroup>
-      <OutputDlls Include="$(OutDir)*.dll" />
-    </ItemGroup>
-    <MakeDir Directories="$(OutDir)heap_dll" Condition="'@(OutputDlls)' != ''" />
-    <Copy SourceFiles="@(OutputDlls)" DestinationFolder="$(OutDir)heap_dll" SkipUnchangedFiles="true" Condition="'@(OutputDlls)' != ''" />
-    <Delete Files="@(OutputDlls)" Condition="'@(OutputDlls)' != ''" />
-  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

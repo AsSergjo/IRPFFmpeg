@@ -589,7 +589,6 @@ void GetImageUrlThread()
         g_bIsImageUrlThreadRunning = false;
         return;
     }
-       
     //Trying iTunes...
     std::wstring artUrlW = TryITunes(trackName);
 

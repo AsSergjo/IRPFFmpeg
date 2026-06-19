@@ -285,6 +285,10 @@ void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistI
     ofs.write(reinterpret_cast<const char*>(&g_enableLimiterGainRider), sizeof(g_enableLimiterGainRider));
     ofs.write(reinterpret_cast<const char*>(&g_enableDeepBass), sizeof(g_enableDeepBass));
     ofs.write(reinterpret_cast<const char*>(&g_minimizeToTray), sizeof(g_minimizeToTray));
+    ofs.write(reinterpret_cast<const char*>(&g_showTrackToastInTray), sizeof(g_showTrackToastInTray));
+    ofs.write(reinterpret_cast<const char*>(&g_trackToastPositionSaved), sizeof(g_trackToastPositionSaved));
+    ofs.write(reinterpret_cast<const char*>(&g_trackToastX), sizeof(g_trackToastX));
+    ofs.write(reinterpret_cast<const char*>(&g_trackToastY), sizeof(g_trackToastY));
 
 
 }
@@ -399,6 +403,42 @@ bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>
     ifs.read(reinterpret_cast<char*>(&minimizeToTray), sizeof(minimizeToTray));
     if (!ifs.fail()) {
         g_minimizeToTray = minimizeToTray;
+    }
+    else {
+        ifs.clear();
+    }
+
+    bool showTrackToastInTray = g_showTrackToastInTray;
+    ifs.read(reinterpret_cast<char*>(&showTrackToastInTray), sizeof(showTrackToastInTray));
+    if (!ifs.fail()) {
+        g_showTrackToastInTray = showTrackToastInTray;
+    }
+    else {
+        ifs.clear();
+    }
+
+    bool trackToastPositionSaved = g_trackToastPositionSaved;
+    ifs.read(reinterpret_cast<char*>(&trackToastPositionSaved), sizeof(trackToastPositionSaved));
+    if (!ifs.fail()) {
+        g_trackToastPositionSaved = trackToastPositionSaved;
+    }
+    else {
+        ifs.clear();
+    }
+
+    int trackToastX = g_trackToastX;
+    ifs.read(reinterpret_cast<char*>(&trackToastX), sizeof(trackToastX));
+    if (!ifs.fail()) {
+        g_trackToastX = trackToastX;
+    }
+    else {
+        ifs.clear();
+    }
+
+    int trackToastY = g_trackToastY;
+    ifs.read(reinterpret_cast<char*>(&trackToastY), sizeof(trackToastY));
+    if (!ifs.fail()) {
+        g_trackToastY = trackToastY;
     }
     else {
         ifs.clear();

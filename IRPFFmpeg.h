@@ -86,6 +86,10 @@ extern bool g_enableExciter;
 extern bool g_enableDeepBass;
 extern bool g_enableLimiterGainRider;
 extern bool g_minimizeToTray;
+extern bool g_showTrackToastInTray;
+extern bool g_trackToastPositionSaved;
+extern int g_trackToastX;
+extern int g_trackToastY;
 extern int g_stereoWidthPercent;
 
 extern std::atomic<bool> showcqt_running;

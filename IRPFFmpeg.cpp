@@ -43,7 +43,12 @@ const wchar_t CLASS_NAME[] = L"IRP+ffmpeg";
 #define ID_TIMER_IMAGE_URL 3
 #define ID_TIMER_METADATA 4
 #define IDT_COVER_RESTORE 5
+#define IDT_TRACK_TOAST_HIDE 6
 static constexpr UINT kTrayIconId = 1;
+static constexpr int kTrackToastSize = 300;
+static constexpr int kTrackToastMargin = 18;
+static const wchar_t TRACK_TOAST_CLASS[] = L"IRPFFmpegTrackToast";
+static const wchar_t TRACK_TOAST_TEXT_CLASS[] = L"IRPFFmpegTrackToastText";
 // ------------------------------- 
 // Global UI Handles
 // ------------------------------- 
@@ -89,6 +94,10 @@ bool g_enableExciter = false;
 bool g_enableDeepBass = false;
 bool g_enableLimiterGainRider = true;
 bool g_minimizeToTray = true;
+bool g_showTrackToastInTray = true;
+bool g_trackToastPositionSaved = false;
+int g_trackToastX = 0;
+int g_trackToastY = 0;
 int g_stereoWidthPercent = 30;
 std::thread g_playbackThread;
 std::string g_currentUrl;
@@ -141,6 +150,13 @@ static bool g_isReallyExiting = false;
 static bool g_trayIconAdded = false;
 static bool g_isInTray = false;
 static bool g_trayHideBalloonShown = false;
+static HWND g_hTrackToast = nullptr;
+static HWND g_hTrackToastText = nullptr;
+static std::wstring g_trackToastTitle;
+static SDL_Window* g_trackToastSdlWindow = nullptr;
+static SDL_Renderer* g_trackToastRenderer = nullptr;
+static bool g_trackToastDragging = false;
+static POINT g_trackToastDragOffset = {};
 static UINT g_wmTaskbarCreated = 0;
 #define WM_RENDER_COVER (WM_USER + 100)
 // формат: "Global\\{GUID}")
@@ -256,6 +272,414 @@ static std::wstring GetNowPlayingTitleText()
     }
 
     return L"Нет данных о треке";
+}
+
+static void CleanupTrackToastSdl()
+{
+    if (g_trackToastRenderer) {
+        SDL_DestroyRenderer(g_trackToastRenderer);
+        g_trackToastRenderer = nullptr;
+    }
+    if (g_trackToastSdlWindow) {
+        SDL_DestroyWindow(g_trackToastSdlWindow);
+        g_trackToastSdlWindow = nullptr;
+    }
+}
+
+static bool EnsureTrackToastSdl(HWND hWnd)
+{
+    if (g_trackToastRenderer) {
+        return true;
+    }
+
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "2");
+    g_trackToastSdlWindow = SDL_CreateWindowFrom(hWnd);
+    if (!g_trackToastSdlWindow) {
+        return false;
+    }
+
+    g_trackToastRenderer = SDL_CreateRenderer(g_trackToastSdlWindow, -1, SDL_RENDERER_ACCELERATED);
+    if (!g_trackToastRenderer) {
+        g_trackToastRenderer = SDL_CreateRenderer(g_trackToastSdlWindow, -1, SDL_RENDERER_SOFTWARE);
+    }
+
+    if (!g_trackToastRenderer) {
+        CleanupTrackToastSdl();
+        return false;
+    }
+
+    SDL_SetRenderDrawBlendMode(g_trackToastRenderer, SDL_BLENDMODE_BLEND);
+    return true;
+}
+
+static int CalculateTrackToastOverlayHeight(HDC hdc, int width, HFONT hFont)
+{
+    HFONT hOldFont = hFont ? (HFONT)SelectObject(hdc, hFont) : nullptr;
+
+    const int lineHeight = 16;
+    const int textPaddingY = 2;
+    const int maxTextHeight = lineHeight * 3;
+
+    RECT calcRect = { 12, 0, width - 12, maxTextHeight };
+    DrawTextW(hdc, g_trackToastTitle.c_str(), -1, &calcRect,
+        DT_CALCRECT | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    int textHeight = calcRect.bottom - calcRect.top;
+    if (textHeight <= 0) {
+        textHeight = lineHeight;
+    }
+    if (textHeight > maxTextHeight) {
+        textHeight = maxTextHeight;
+    }
+
+    if (hOldFont) {
+        SelectObject(hdc, hOldFont);
+    }
+
+    return (std::max)(18, textHeight + textPaddingY * 2);
+}
+
+static HFONT CreateTrackToastTitleFont()
+{
+    LOGFONTW lf = {};
+    lf.lfHeight = -15;
+    lf.lfWeight = FW_NORMAL;
+    lf.lfCharSet = DEFAULT_CHARSET;
+    wcscpy_s(lf.lfFaceName, L"Segoe UI");
+
+    return CreateFontIndirectW(&lf);
+}
+
+static int GetTrackToastOverlayHeight(HWND hWnd)
+{
+    HDC hdc = GetDC(hWnd);
+    if (!hdc) {
+        return 22;
+    }
+
+    HFONT hTitleFont = CreateTrackToastTitleFont();
+    RECT rc = {};
+    GetClientRect(hWnd, &rc);
+    int overlayHeight = CalculateTrackToastOverlayHeight(hdc, rc.right - rc.left, hTitleFont);
+
+    if (hTitleFont) {
+        DeleteObject(hTitleFont);
+    }
+    ReleaseDC(hWnd, hdc);
+    return overlayHeight;
+}
+
+static void LayoutTrackToastText(HWND hWnd)
+{
+    if (!g_hTrackToastText) {
+        return;
+    }
+
+    RECT rc = {};
+    GetClientRect(hWnd, &rc);
+    const int overlayHeight = GetTrackToastOverlayHeight(hWnd);
+    SetWindowPos(g_hTrackToastText, HWND_TOP, 0, 0, rc.right - rc.left, overlayHeight,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    InvalidateRect(g_hTrackToastText, nullptr, TRUE);
+}
+
+static void DrawTrackToastText(HWND hWnd, HDC hdc)
+{
+    RECT rc = {};
+    GetClientRect(hWnd, &rc);
+
+    HFONT hTitleFont = CreateTrackToastTitleFont();
+    HFONT hOldFont = hTitleFont ? (HFONT)SelectObject(hdc, hTitleFont) : nullptr;
+    RECT textRect = { 12, 2, rc.right - 12, rc.bottom - 2 };
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(245, 245, 245));
+    DrawTextW(hdc, g_trackToastTitle.c_str(), -1, &textRect,
+        DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    if (hOldFont) {
+        SelectObject(hdc, hOldFont);
+    }
+    if (hTitleFont) {
+        DeleteObject(hTitleFont);
+    }
+}
+
+static void DrawTrackToast(HWND hWnd, HDC hdc)
+{
+    RECT rc = {};
+    GetClientRect(hWnd, &rc);
+    const int width = rc.right - rc.left;
+    const int height = rc.bottom - rc.top;
+    const int overlayHeight = GetTrackToastOverlayHeight(hWnd);
+
+    if (EnsureTrackToastSdl(hWnd)) {
+        SDL_SetRenderDrawColor(g_trackToastRenderer, 35, 38, 44, 255);
+        SDL_RenderClear(g_trackToastRenderer);
+
+        SDL_Surface* loadedSurface = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_coverFileMutex);
+            loadedSurface = IMG_Load("cover_cache\\cover.jpg");
+        }
+
+        if (loadedSurface) {
+            SDL_Texture* coverTexture = SDL_CreateTextureFromSurface(g_trackToastRenderer, loadedSurface);
+            SDL_FreeSurface(loadedSurface);
+
+            if (coverTexture) {
+                SDL_Rect dst = { 0, 0, width, height };
+                SDL_RenderCopy(g_trackToastRenderer, coverTexture, nullptr, &dst);
+                SDL_DestroyTexture(coverTexture);
+            }
+        }
+
+        SDL_SetRenderDrawBlendMode(g_trackToastRenderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(g_trackToastRenderer, 0, 0, 0, 190);
+        SDL_Rect overlayRect = { 0, 0, width, overlayHeight };
+        SDL_RenderFillRect(g_trackToastRenderer, &overlayRect);
+
+        SDL_SetRenderDrawBlendMode(g_trackToastRenderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(g_trackToastRenderer, 190, 190, 190, 255);
+        SDL_Rect borderRect = { 0, 0, width - 1, height - 1 };
+        SDL_RenderDrawRect(g_trackToastRenderer, &borderRect);
+
+        SDL_RenderPresent(g_trackToastRenderer);
+    }
+    else {
+        HBRUSH fallbackBrush = CreateSolidBrush(RGB(35, 38, 44));
+        FillRect(hdc, &rc, fallbackBrush);
+        DeleteObject(fallbackBrush);
+
+        RECT overlayRect = { 0, 0, width, overlayHeight };
+        HBRUSH overlayBrush = CreateSolidBrush(RGB(0, 0, 0));
+        FillRect(hdc, &overlayRect, overlayBrush);
+        DeleteObject(overlayBrush);
+
+        HBRUSH borderBrush = CreateSolidBrush(RGB(190, 190, 190));
+        FrameRect(hdc, &rc, borderBrush);
+        DeleteObject(borderBrush);
+    }
+
+    LayoutTrackToastText(hWnd);
+}
+
+static LRESULT CALLBACK TrackToastTextProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        DrawTrackToastText(hWnd, hdc);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    case WM_LBUTTONDOWN:
+    {
+        HWND hParent = GetParent(hWnd);
+        if (hParent) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            MapWindowPoints(hWnd, hParent, &pt, 1);
+            SendMessageW(hParent, WM_LBUTTONDOWN, wParam, MAKELPARAM(pt.x, pt.y));
+            return 0;
+        }
+        break;
+    }
+    case WM_NCDESTROY:
+        if (g_hTrackToastText == hWnd) {
+            g_hTrackToastText = nullptr;
+        }
+        break;
+    }
+
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+static LRESULT CALLBACK TrackToastProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        DrawTrackToast(hWnd, hdc);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    case WM_TIMER:
+        if (wParam == IDT_TRACK_TOAST_HIDE) {
+            KillTimer(hWnd, IDT_TRACK_TOAST_HIDE);
+            ShowWindow(hWnd, SW_HIDE);
+            return 0;
+        }
+        break;
+    case WM_LBUTTONDOWN:
+        KillTimer(hWnd, IDT_TRACK_TOAST_HIDE);
+        g_trackToastDragging = true;
+        g_trackToastDragOffset.x = GET_X_LPARAM(lParam);
+        g_trackToastDragOffset.y = GET_Y_LPARAM(lParam);
+        SetCapture(hWnd);
+        return 0;
+    case WM_MOUSEMOVE:
+        if (g_trackToastDragging) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ClientToScreen(hWnd, &pt);
+            int x = pt.x - g_trackToastDragOffset.x;
+            int y = pt.y - g_trackToastDragOffset.y;
+            SetWindowPos(hWnd, HWND_TOPMOST, x, y, 0, 0,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            return 0;
+        }
+        break;
+    case WM_LBUTTONUP:
+        if (g_trackToastDragging) {
+            g_trackToastDragging = false;
+            ReleaseCapture();
+
+            RECT toastRc = {};
+            GetWindowRect(hWnd, &toastRc);
+            g_trackToastPositionSaved = true;
+            g_trackToastX = toastRc.left;
+            g_trackToastY = toastRc.top;
+
+            SetTimer(hWnd, IDT_TRACK_TOAST_HIDE, 6500, nullptr);
+            return 0;
+        }
+        break;
+    case WM_CAPTURECHANGED:
+        g_trackToastDragging = false;
+        break;
+    case WM_NCDESTROY:
+        CleanupTrackToastSdl();
+        if (g_hTrackToastText && GetParent(g_hTrackToastText) == hWnd) {
+            g_hTrackToastText = nullptr;
+        }
+        if (g_hTrackToast == hWnd) {
+            g_hTrackToast = nullptr;
+        }
+        break;
+    }
+
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+static void RegisterTrackToastClass()
+{
+    static bool registered = false;
+    static bool textRegistered = false;
+    if (registered && textRegistered) {
+        return;
+    }
+
+    HINSTANCE hInstance = GetModuleHandleW(nullptr);
+    HCURSOR hCursor = LoadCursor(nullptr, IDC_ARROW);
+
+    if (!registered) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = TrackToastProc;
+        wc.hInstance = hInstance;
+        wc.hCursor = hCursor;
+        wc.hbrBackground = nullptr;
+        wc.lpszClassName = TRACK_TOAST_CLASS;
+
+        if (RegisterClassW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
+            registered = true;
+        }
+    }
+
+    if (!textRegistered) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = TrackToastTextProc;
+        wc.hInstance = hInstance;
+        wc.hCursor = hCursor;
+        wc.hbrBackground = nullptr;
+        wc.lpszClassName = TRACK_TOAST_TEXT_CLASS;
+
+        if (RegisterClassW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
+            textRegistered = true;
+        }
+    }
+}
+
+static void ShowTrackToastIfNeeded(HWND hOwner)
+{
+    if (!g_showTrackToastInTray || !g_isInTray) {
+        return;
+    }
+
+    g_trackToastTitle = GetNowPlayingTitleText();
+    if (g_trackToastTitle.empty() || g_trackToastTitle == L"Нет данных о треке") {
+        return;
+    }
+
+    RegisterTrackToastClass();
+
+    if (!g_hTrackToast) {
+        g_hTrackToast = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            TRACK_TOAST_CLASS,
+            L"",
+            WS_POPUP,
+            CW_USEDEFAULT, CW_USEDEFAULT,
+            kTrackToastSize, kTrackToastSize,
+            hOwner,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            nullptr);
+    }
+
+    if (!g_hTrackToast) {
+        return;
+    }
+
+    if (!g_hTrackToastText) {
+        g_hTrackToastText = CreateWindowExW(
+            WS_EX_TRANSPARENT,
+            TRACK_TOAST_TEXT_CLASS,
+            L"",
+            WS_CHILD | WS_VISIBLE,
+            0, 0,
+            kTrackToastSize, 24,
+            g_hTrackToast,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            nullptr);
+    }
+
+    MONITORINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    HMONITOR hMon = MonitorFromWindow(hOwner, MONITOR_DEFAULTTONEAREST);
+    if (!GetMonitorInfoW(hMon, &mi)) {
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &mi.rcWork, 0);
+    }
+
+    int x = mi.rcWork.right - kTrackToastSize - kTrackToastMargin;
+    int y = mi.rcWork.bottom - kTrackToastSize - kTrackToastMargin;
+    if (g_trackToastPositionSaved) {
+        x = g_trackToastX;
+        y = g_trackToastY;
+    }
+
+    if (x < mi.rcWork.left) x = mi.rcWork.left;
+    if (y < mi.rcWork.top) y = mi.rcWork.top;
+    if (x + kTrackToastSize > mi.rcWork.right) x = mi.rcWork.right - kTrackToastSize;
+    if (y + kTrackToastSize > mi.rcWork.bottom) y = mi.rcWork.bottom - kTrackToastSize;
+
+    SetWindowPos(g_hTrackToast, HWND_TOPMOST, x, y, kTrackToastSize, kTrackToastSize,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    LayoutTrackToastText(g_hTrackToast);
+    InvalidateRect(g_hTrackToast, nullptr, TRUE);
+    UpdateWindow(g_hTrackToast);
+    if (g_hTrackToastText) {
+        InvalidateRect(g_hTrackToastText, nullptr, TRUE);
+        UpdateWindow(g_hTrackToastText);
+    }
+    SetTimer(g_hTrackToast, IDT_TRACK_TOAST_HIDE, 6500, nullptr);
 }
 
 static bool IsTransientPlaybackStatus(const std::wstring& status)
@@ -720,6 +1144,101 @@ static void SetMenuItemBitmapByCommand(HMENU hMenu, UINT commandId, HBITMAP hBit
     SetMenuItemInfoW(hMenu, commandId, FALSE, &mii);
 }
 
+static void PaintRoundedRect(HDC hdc, const RECT& rc, int radius, COLORREF fill, COLORREF outline)
+{
+    HBRUSH hBrush = CreateSolidBrush(fill);
+    HPEN hPen = CreatePen(PS_SOLID, 1, outline);
+    HGDIOBJ oldBrush = SelectObject(hdc, hBrush);
+    HGDIOBJ oldPen = SelectObject(hdc, hPen);
+
+    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
+
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBrush);
+    DeleteObject(hPen);
+    DeleteObject(hBrush);
+}
+
+static COLORREF GetSliderAccentColor(UINT id)
+{
+    UNREFERENCED_PARAMETER(id);
+    //return RGB(78, 143, 224); //темнее
+    return RGB(120, 205, 240);
+}
+
+static void DrawStyledSliderChannel(LPNMCUSTOMDRAW lpcd)
+{
+    HWND hTrackBar = lpcd->hdr.hwndFrom;
+    HDC hdc = lpcd->hdc;
+
+    RECT rcClient = {};
+    GetClientRect(hTrackBar, &rcClient);
+
+    HBRUSH hBackBrush = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+    FillRect(hdc, &rcClient, hBackBrush);
+    DeleteObject(hBackBrush);
+
+    RECT buttonRect = rcClient;
+    InflateRect(&buttonRect, -1, -1);
+
+    RECT shadowRect = buttonRect;
+    OffsetRect(&shadowRect, 0, 1);
+    PaintRoundedRect(hdc, shadowRect, 10, RGB(226, 230, 235), RGB(226, 230, 235));
+    PaintRoundedRect(hdc, buttonRect, 10, RGB(247, 248, 250), RGB(218, 224, 232));
+
+    const int buttonHeight = static_cast<int>(buttonRect.bottom - buttonRect.top);
+    const int trackHeight = (std::max)(2, buttonHeight / 4 - 2);
+    const int trackCenterY = buttonRect.top + (buttonRect.bottom - buttonRect.top) / 2 + 4;
+    RECT trackRect = {
+        buttonRect.left + 6,
+        trackCenterY - trackHeight / 2,
+        buttonRect.right - 6,
+        trackCenterY + (trackHeight + 1) / 2
+    };
+
+    PaintRoundedRect(hdc, trackRect, 4, RGB(223, 227, 233), RGB(205, 211, 219));
+
+    int minVal = (int)SendMessage(hTrackBar, TBM_GETRANGEMIN, 0, 0);
+    int maxVal = (int)SendMessage(hTrackBar, TBM_GETRANGEMAX, 0, 0);
+    int curVal = (int)SendMessage(hTrackBar, TBM_GETPOS, 0, 0);
+    if (maxVal <= minVal) {
+        return;
+    }
+
+    const int trackWidth = trackRect.right - trackRect.left;
+    const COLORREF accent = GetSliderAccentColor((UINT)lpcd->hdr.idFrom);
+
+    if (minVal < 0 && maxVal > 0) {
+        int zeroX = trackRect.left + MulDiv(0 - minVal, trackWidth, maxVal - minVal);
+        int curX = trackRect.left + MulDiv(curVal - minVal, trackWidth, maxVal - minVal);
+
+        RECT centerLine = { zeroX - 1, trackRect.top + 1, zeroX + 1, trackRect.bottom - 1 };
+        HBRUSH hCenterBrush = CreateSolidBrush(RGB(145, 153, 165));
+        FillRect(hdc, &centerLine, hCenterBrush);
+        DeleteObject(hCenterBrush);
+
+        if (curX != zeroX) {
+            RECT progressRect = trackRect;
+            progressRect.left = (std::min)(zeroX, curX);
+            progressRect.right = (std::max)(zeroX, curX);
+            if (progressRect.right - progressRect.left < 2) {
+                progressRect.right = progressRect.left + 2;
+            }
+
+            PaintRoundedRect(hdc, progressRect, 4, accent, accent);
+        }
+    }
+    else if (curVal > minVal) {
+        int activeWidth = MulDiv(curVal - minVal, trackWidth, maxVal - minVal);
+        RECT progressRect = trackRect;
+        progressRect.right = trackRect.left + activeWidth;
+
+        if (progressRect.right - progressRect.left >= 2) {
+            PaintRoundedRect(hdc, progressRect, 4, accent, accent);
+        }
+    }
+}
+
 static void FillTrayIconData(HWND hWnd, NOTIFYICONDATAW& nid)
 {
     ZeroMemory(&nid, sizeof(nid));
@@ -783,6 +1302,9 @@ static void RestoreMainWindow(HWND hWnd)
         RemoveTrayIcon(hWnd);
         g_isInTray = false;
     }
+    if (g_hTrackToast) {
+        ShowWindow(g_hTrackToast, SW_HIDE);
+    }
     SetForegroundWindow(hWnd);
 }
 
@@ -806,6 +1328,10 @@ static void RequestApplicationExit(HWND hWnd)
     g_isReallyExiting = true;
     g_isInTray = false;
     RemoveTrayIcon(hWnd);
+    if (g_hTrackToast) {
+        DestroyWindow(g_hTrackToast);
+        g_hTrackToast = nullptr;
+    }
     SendMessageW(hWnd, WM_DESTROY, 0, 0);
 }
 
@@ -1558,6 +2084,7 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
         SendDlgItemMessageW(hDlg, IDC_CHECK_DEEP_BASS, BM_SETCHECK, g_enableDeepBass ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, BM_SETCHECK, g_enableLimiterGainRider ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, BM_SETCHECK, g_minimizeToTray ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendDlgItemMessageW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, BM_SETCHECK, g_showTrackToastInTray ? BST_CHECKED : BST_UNCHECKED, 0);
         SetDlgItemInt(hDlg, IDC_EDIT_STEREO_WIDTH, static_cast<UINT>(ClampStereoWidthPercent(g_stereoWidthPercent)), FALSE);
 
         if (HWND hEditStereo = GetDlgItem(hDlg, IDC_EDIT_STEREO_WIDTH)) {
@@ -1663,6 +2190,14 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             {
                 g_minimizeToTray =
                     (SendDlgItemMessageW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            }
+            return (INT_PTR)TRUE;
+
+        case IDC_CHECK_SHOW_TRACK_TOAST:
+            if (notif == BN_CLICKED)
+            {
+                g_showTrackToastInTray =
+                    (SendDlgItemMessageW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, BM_GETCHECK, 0, 0) == BST_CHECKED);
             }
             return (INT_PTR)TRUE;
 
@@ -2329,6 +2864,8 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
 			//LogToUI("Failed to init cover renderer after download");
         }
+
+        ShowTrackToastIfNeeded(hDlg);
   
     }
     break;
@@ -2760,14 +3297,12 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                         else
                             rcThumb.left += 40;
 
-                        rcThumb.top += 7;
-
                         DrawText(
                             hdc,
                             buf,
                             -1,
                             &rcThumb,
-                            DT_CENTER | DT_SINGLELINE
+                            DT_CENTER | DT_VCENTER | DT_SINGLELINE
                         );
 
                         SelectObject(hdc, oldFont);
@@ -2780,61 +3315,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                     // =======================
                     if (lpcd->dwItemSpec == TBCD_CHANNEL)
                     {
-                        HWND hTrackBar = lpcd->hdr.hwndFrom;
-                        HDC hdc = lpcd->hdc;
-
-                        RECT rcClient;
-                        GetClientRect(hTrackBar, &rcClient);
-
-                        int minVal = (int)SendMessage(hTrackBar, TBM_GETRANGEMIN, 0, 0);
-                        int maxVal = (int)SendMessage(hTrackBar, TBM_GETRANGEMAX, 0, 0);
-                        int curVal = (int)SendMessage(hTrackBar, TBM_GETPOS, 0, 0);
-
-                        int yCenter = (rcClient.top + rcClient.bottom - 2) / 2;
-                        int trackHeight = 4;
-                        int trackMargin = 8;
-
-                        RECT trackRect =
-                        {
-                            rcClient.left + trackMargin,
-                            yCenter - trackHeight / 2 + 4,
-                            rcClient.right - trackMargin,
-                            yCenter + trackHeight / 2 + 4
-                        };
-
-                        HBRUSH hTrackBgBrush = CreateSolidBrush(RGB(80, 80, 80));
-                        HPEN hNullPen = (HPEN)GetStockObject(NULL_PEN);
-
-                        HGDIOBJ oldPen = SelectObject(hdc, hNullPen);
-                        HGDIOBJ oldBrush = SelectObject(hdc, hTrackBgBrush);
-
-                        RoundRect(hdc,
-                            trackRect.left, trackRect.top,
-                            trackRect.right, trackRect.bottom,
-                            2, 2);
-
-                        if (maxVal > minVal && curVal > minVal)
-                        {
-                            int trackWidth = trackRect.right - trackRect.left;
-                            int activeWidth = MulDiv(curVal - minVal, trackWidth, maxVal - minVal);
-
-                            RECT progressRect = trackRect;
-                            progressRect.right = trackRect.left + activeWidth;
-
-                            HBRUSH hProgressBrush = CreateSolidBrush(RGB(100, 200, 100));
-                            SelectObject(hdc, hProgressBrush);
-
-                            RoundRect(hdc,
-                                progressRect.left, progressRect.top,
-                                progressRect.right, progressRect.bottom,
-                                1, 1);
-
-                            DeleteObject(hProgressBrush);
-                        }
-
-                        SelectObject(hdc, oldPen);
-                        SelectObject(hdc, oldBrush);
-                        DeleteObject(hTrackBgBrush);
+                        DrawStyledSliderChannel(lpcd);
 
                         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
                         return TRUE;
@@ -3022,6 +3503,10 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
     case WM_DESTROY:
     {
         RemoveTrayIcon(hDlg);
+        if (g_hTrackToast) {
+            DestroyWindow(g_hTrackToast);
+            g_hTrackToast = nullptr;
+        }
 
         HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
         int itemCount = ListView_GetItemCount(hListView);
