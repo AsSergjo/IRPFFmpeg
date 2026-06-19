@@ -544,7 +544,7 @@ static bool TryBingImages(const std::wstring& trackName)
         if (decodedUrlW.find(L"archive.org") != std::wstring::npos) { pos++; continue; }
         if (decodedUrlW.find(L"bing.com") != std::wstring::npos) { pos++; continue; }
 
-        //LogToUI(decoded);
+        //LogToUI(wstring_to_utf8(decodedUrlW));
 
         if (is_image_url_valid(decodedUrlW))
         {

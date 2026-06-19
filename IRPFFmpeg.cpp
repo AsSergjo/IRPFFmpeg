@@ -150,6 +150,7 @@ static bool g_isReallyExiting = false;
 static bool g_trayIconAdded = false;
 static bool g_isInTray = false;
 static bool g_trayHideBalloonShown = false;
+static bool g_restoringFromTray = false;
 static HWND g_hTrackToast = nullptr;
 static HWND g_hTrackToastText = nullptr;
 static std::wstring g_trackToastTitle;
@@ -298,9 +299,9 @@ static bool EnsureTrackToastSdl(HWND hWnd)
         return false;
     }
 
-    g_trackToastRenderer = SDL_CreateRenderer(g_trackToastSdlWindow, -1, SDL_RENDERER_ACCELERATED);
+    g_trackToastRenderer = SDL_CreateRenderer(g_trackToastSdlWindow, -1, SDL_RENDERER_SOFTWARE);
     if (!g_trackToastRenderer) {
-        g_trackToastRenderer = SDL_CreateRenderer(g_trackToastSdlWindow, -1, SDL_RENDERER_SOFTWARE);
+        g_trackToastRenderer = SDL_CreateRenderer(g_trackToastSdlWindow, -1, SDL_RENDERER_ACCELERATED);
     }
 
     if (!g_trackToastRenderer) {
@@ -650,6 +651,8 @@ static void ShowTrackToastIfNeeded(HWND hOwner)
             GetModuleHandleW(nullptr),
             nullptr);
     }
+
+    CleanupTrackToastSdl();
 
     MONITORINFO mi = {};
     mi.cbSize = sizeof(mi);
@@ -1294,10 +1297,7 @@ static void RestoreMainWindow(HWND hWnd)
         return;
     }
 
-    ShowWindow(hWnd, SW_SHOW);
-    if (IsIconic(hWnd)) {
-        ShowWindow(hWnd, SW_RESTORE);
-    }
+    g_restoringFromTray = true;
     if (g_isInTray) {
         RemoveTrayIcon(hWnd);
         g_isInTray = false;
@@ -1305,7 +1305,17 @@ static void RestoreMainWindow(HWND hWnd)
     if (g_hTrackToast) {
         ShowWindow(g_hTrackToast, SW_HIDE);
     }
+
+    ShowWindow(hWnd, SW_RESTORE);
+    ShowWindow(hWnd, SW_SHOWNORMAL);
+    SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    BringWindowToTop(hWnd);
+    SetActiveWindow(hWnd);
     SetForegroundWindow(hWnd);
+    g_restoringFromTray = false;
 }
 
 static void HideMainWindowToTray(HWND hWnd)
@@ -2496,7 +2506,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         return (INT_PTR)TRUE;
     }
     case WM_SIZE:
-        if (wParam == SIZE_MINIMIZED && g_minimizeToTray && !g_isReallyExiting) {
+        if (wParam == SIZE_MINIMIZED && g_minimizeToTray && !g_isReallyExiting && !g_restoringFromTray) {
             HideMainWindowToTray(hDlg);
             return (INT_PTR)TRUE;
         }
@@ -2850,10 +2860,14 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
     case WM_APP_COVER_DOWNLOADED: {
 
+        bool coverReady = false;
         if (initCoverRenderer(hDlg)) {
             if (reloadCoverTexture()) {
                 if (!redrawCoverImage(hDlg)) {
 					//LogToUI("Failed to redraw cover image after download");
+                }
+                else {
+                    coverReady = true;
                 }
             }
             else {
@@ -2865,7 +2879,9 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 			//LogToUI("Failed to init cover renderer after download");
         }
 
-        ShowTrackToastIfNeeded(hDlg);
+        if (coverReady) {
+            ShowTrackToastIfNeeded(hDlg);
+        }
   
     }
     break;

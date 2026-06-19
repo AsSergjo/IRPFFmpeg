@@ -168,7 +168,7 @@ BEGIN
     GROUPBOX        " Настройки программы ",IDC_STATIC,7,127,241,42
     CONTROL         " При минимизации отправлять в трей",IDC_CHECK_MINIMIZE_TO_TRAY,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,139,210,10
-    CONTROL         " Показывать обложку при смене трека",IDC_CHECK_SHOW_TRACK_TOAST,
+    CONTROL         " В трее показывать обложку при смене трека",IDC_CHECK_SHOW_TRACK_TOAST,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,152,220,10
 END
 
