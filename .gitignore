@@ -57,6 +57,7 @@ heap_dll/
 screen_shot_*.png
 
 # Packaged binaries and installers
+dist/
 *.exe
 *.dll
 *.msi
