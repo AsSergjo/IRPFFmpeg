@@ -37,8 +37,31 @@ Start_IRPFFmpeg.exe
 Start_IRPFFmpeg.exe
 IRPFFmpeg.exe
 heap_dll/
+  avcodec-62.dll
+  avfilter-11.dll
+  avformat-62.dll
+  avutil-60.dll
+  jpeg62.dll
+  libpng16.dll
+  SDL2.dll
+  SDL2_image.dll
+  swresample-6.dll
+  swscale-9.dll
+  turbojpeg.dll
+  zlib1.dll
 playlist.m3u
 ```
+
+Обычному пользователю лучше скачивать полный архив IRPFFmpeg из GitHub Releases: в нем `heap_dll` уже должен быть собран и разложен правильно. Если собирать комплект вручную, используйте только x64 DLL и не смешивайте файлы из разных сборок.
+
+Где взять DLL вручную:
+
+- FFmpeg DLL (`avcodec`, `avfilter`, `avformat`, `avutil`, `swresample`, `swscale`) - с официальной страницы загрузки FFmpeg: https://ffmpeg.org/download.html. Сам проект FFmpeg публикует исходный код и дает ссылки на готовые Windows builds, например gyan.dev и BtbN. Нужна shared/dev x64-сборка с DLL из папки `bin`.
+- `SDL2.dll` - из официальных архивов SDL2 для Visual C++: https://www.libsdl.org/release/. Обычно нужен архив вида `SDL2-devel-...-VC.zip`, внутри DLL лежит в `lib\x64`.
+- `SDL2_image.dll` - из релизов SDL2_image: https://github.com/libsdl-org/SDL_image/releases. Берите Windows x64/VC-комплект, совместимый с вашей версией SDL2.
+- `libpng16.dll`, `jpeg62.dll`, `turbojpeg.dll`, `zlib1.dll` - сопутствующие библиотеки изображений и сжатия. Обычно они уже идут в комплекте с SDL2_image/вашей сборкой зависимостей или могут быть получены через vcpkg (`x64-windows`). Для релиза используйте ровно те DLL, с которыми приложение было собрано и проверено.
+
+Если загрузчик сообщает, что не хватает DLL, верните недостающие файлы в `heap_dll` или скачайте полный релизный архив заново.
 
 Во время работы приложение может создать:
 
