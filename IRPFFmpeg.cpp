@@ -787,6 +787,88 @@ static bool IsInterestingFfmpegStatusLine(const std::string& lower)
            lower.find("network") != std::string::npos;
 }
 
+static HWND CreateTooltipWindow(HWND hParent)
+{
+    HWND hTooltip = CreateWindowExW(
+        WS_EX_TOPMOST,
+        TOOLTIPS_CLASSW,
+        nullptr,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        hParent,
+        nullptr,
+        GetModuleHandleW(nullptr),
+        nullptr);
+
+    if (hTooltip) {
+        SetWindowPos(hTooltip, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SendMessageW(hTooltip, TTM_SETMAXTIPWIDTH, 0, 360);
+        SendMessageW(hTooltip, TTM_SETDELAYTIME, TTDT_INITIAL, 450);
+        SendMessageW(hTooltip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 8000);
+    }
+
+    return hTooltip;
+}
+
+static void AddTooltip(HWND hTooltip, HWND hParent, HWND hControl, const wchar_t* text)
+{
+    if (!hTooltip || !hParent || !hControl || !text || !*text) {
+        return;
+    }
+
+    TOOLINFOW ti = {};
+    ti.cbSize = sizeof(ti);
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd = hParent;
+    ti.uId = reinterpret_cast<UINT_PTR>(hControl);
+    ti.lpszText = const_cast<LPWSTR>(text);
+
+    SendMessageW(hTooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
+}
+
+static void AddDlgItemTooltip(HWND hTooltip, HWND hDlg, int controlId, const wchar_t* text)
+{
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, controlId), text);
+}
+
+static void SetupMainDialogTooltips(HWND hDlg)
+{
+    HWND hTooltip = CreateTooltipWindow(hDlg);
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_PP, L"Воспроизвести или остановить текущую станцию");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_REV, L"Перейти к предыдущей станции в списке");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_FORV, L"Перейти к следующей станции в списке");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_PREVIOUS_STATION, L"Вернуться к ранее звучавшей станции");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_REC, L"Начать или остановить запись текущего потока");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_ST_SETTING, L"Открыть настройки программы");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_BASS, L"Низкие Частоты");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_HI, L"Высокие Частоты");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_VOL, L"Громкость");
+}
+
+static void SetupSettingsDialogTooltips(HWND hDlg)
+{
+    HWND hTooltip = CreateTooltipWindow(hDlg);
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_MP3, L"Записывать поток в MP3 320 kbit/sec");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_FLAC, L"Записывать поток в FLAC без потерь");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_STEREO_WIDTH, L"Включить расширение стереобазы");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_EXCITER, L"Добавить яркость и выразительность верхним частотам");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_DEEP_BASS, L"Усилить глубину низких частот");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, L"Автоматически выравнивать громкость воспроизведения");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, L"Контролировать пики и удерживать комфортный уровень сигнала");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, L"При нажатии кнопки свернуть прятать программу в трей");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_SHOW_TRACK_TOAST, L"Когда программа в трее, показывать обложку при смене трека");
+    AddDlgItemTooltip(hTooltip, hDlg, IDOK, L"Сохранить настройки и закрыть окно");
+}
+
+static void SetupAddStationDialogTooltips(HWND hDlg, HWND hOk, HWND hCancel)
+{
+    HWND hTooltip = CreateTooltipWindow(hDlg);
+    AddTooltip(hTooltip, hDlg, hOk, L"Добавить станцию в список");
+    AddTooltip(hTooltip, hDlg, hCancel, L"Закрыть окно без добавления станции");
+}
+
 static std::wstring TranslateFfmpegStatusLine(const std::string& line)
 {
     const std::string lower = ToLowerAsciiCopy(line);
@@ -1422,7 +1504,11 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
     switch (message)
     {
     case WM_INITDIALOG:
+    {
+        HWND hTooltip = CreateTooltipWindow(hDlg);
+        AddDlgItemTooltip(hTooltip, hDlg, IDOK, L"Закрыть окно информации о программе");
         return (INT_PTR)TRUE;
+    }
 
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
@@ -1607,6 +1693,7 @@ static LRESULT CALLBACK AddStationDialogProc(HWND hWnd, UINT msg, WPARAM wParam,
         for (HWND hCtl : controls) {
             if (hCtl) SendMessageW(hCtl, WM_SETFONT, (WPARAM)hFont, TRUE);
         }
+        SetupAddStationDialogTooltips(hWnd, hOk, hCancel);
 
         SendMessageW(state->hNameEdit, EM_LIMITTEXT, 256, 0);
         SendMessageW(state->hUrlEdit, EM_LIMITTEXT, 2048, 0);
@@ -2105,6 +2192,7 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             EnableWindow(hEditStereo, g_enableStereoWidth ? TRUE : FALSE);
         }
 
+        SetupSettingsDialogTooltips(hDlg);
 
         return (INT_PTR)TRUE;
     }
@@ -2262,13 +2350,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         // Экземпляр уже запущен — активируем его окно
         HWND hWndExisting = FindWindowW(NULL, L"IRP+ffmpeG");
         if (hWndExisting) {
-            if (IsIconic(hWndExisting)) {
+            if (!PostMessageW(hWndExisting, WM_APP_RESTORE_FROM_SINGLE_INSTANCE, 0, 0)) {
                 ShowWindow(hWndExisting, SW_RESTORE);
+                SetForegroundWindow(hWndExisting);
             }
-            else {
-                ShowWindow(hWndExisting, SW_SHOW);
-            }
-            SetForegroundWindow(hWndExisting);
         }
 
         CloseHandle(hMutex);
@@ -2389,6 +2474,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         g_hSliderTreble = GetDlgItem(hDlg, IDC_SLIDER_HI);
         g_hSliderBass = GetDlgItem(hDlg, IDC_SLIDER_BASS);
         g_hNowPlayingBar = GetDlgItem(hDlg, IDC_STATIC_NOW_PLAYING_BAR);
+        SetupMainDialogTooltips(hDlg);
 
         // Load playlist from file
         int selectedIndex = -1;
@@ -3511,6 +3597,10 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
         break;
     }
+
+    case WM_APP_RESTORE_FROM_SINGLE_INSTANCE:
+        RestoreMainWindow(hDlg);
+        return (INT_PTR)TRUE;
 
     case WM_CLOSE:
         RequestApplicationExit(hDlg);

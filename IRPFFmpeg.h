@@ -130,6 +130,7 @@ extern const int maxVisibleExtent;
 #define WM_APP_UPDATE_ICON (WM_APP + 6)
 #define WM_APP_ELAPSED_TIME  (WM_APP + 7)
 #define WM_APP_SET_VOLUME_SLIDER (WM_APP + 8)
+#define WM_APP_RESTORE_FROM_SINGLE_INSTANCE (WM_APP + 15)
 
 HRESULT InitWASAPI(IAudioClient*& audioClient, IAudioRenderClient*& renderClient, WAVEFORMATEX*& pwfx, UINT32& bufferFrameCount);
 SwrContext* InitSwResample(AVCodecContext* inputCtx, WAVEFORMATEX* wasapiFormat);

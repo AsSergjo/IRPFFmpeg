@@ -1526,6 +1526,21 @@ void replace_all(std::string& s, const std::string& from, const std::string& to)
     }
 }
 
+std::string remove_prefix(std::string s) {
+    size_t i = 0;
+    // пропустить цифры
+    while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) ++i;
+    // пропустить пробелы
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    // затем ожидаем '|' и возможные пробелы после
+    if (i < s.size() && s[i] == '|') {
+        ++i;
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+        return s.substr(i);
+    }
+    return s; // если шаблон не найден — вернуть как есть
+}
+
 // Function to get metadata from format context
 void update_stream_metadata() {
 
@@ -1562,6 +1577,15 @@ void update_stream_metadata() {
         if (eq_pos != std::string::npos) {
             std::string key = line.substr(0, eq_pos);
             std::string value = line.substr(eq_pos + 3); // length of " = "
+            if (!value.empty() && value.back() == ',') {
+                value.pop_back();
+            }
+            for (size_t i = 0; i + 1 < value.size(); ++i) {
+                if (value[i] == ',' && value[i + 1] != ' ') {
+                    value.insert(i + 1, " ");
+                    ++i; // сдвигаемся после вставки
+                }
+            }
             meta_map[key] = value;
         }
     }
@@ -1643,12 +1667,7 @@ void update_stream_metadata() {
         if (new_metadata.empty()) return;
 
         //2.
-        std::string key = "| ";
-        auto pos = new_metadata.find(key);
-        if (pos != std::string::npos) {
-            pos += key.size();
-            new_metadata = new_metadata.substr(pos, std::string::npos);
-        }
+        new_metadata = remove_prefix(new_metadata);//потом добавить удаление других шаблонов, если будут замечены
 
         new_metadata = std::regex_replace(new_metadata, std::regex("—"), "-");
 		new_metadata = CollapseRepeatedTrailingTitle(new_metadata);// удаляем повторяющуюся часть ("Artist - Title - Title" -> "Artist - Title")
