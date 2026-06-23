@@ -150,6 +150,7 @@
     <ClInclude Include="file_recording.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="IRPFFmpeg.h" />
+    <ClInclude Include="language_manager.h" />
     <ClInclude Include="metadata_decode.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
@@ -160,6 +161,7 @@
     <ClCompile Include="cover_art.cpp" />
     <ClCompile Include="file_recording.cpp" />
     <ClCompile Include="IRPFFmpeg.cpp" />
+    <ClCompile Include="language_manager.cpp" />
     <ClCompile Include="metadata_decode.cpp" />
     <ClCompile Include="util.cpp" />
   </ItemGroup>

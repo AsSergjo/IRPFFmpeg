@@ -4,6 +4,7 @@
 #include "IRPFFmpeg.h"
 #include "cover_art.h"
 #include "file_recording.h"
+#include "language_manager.h"
 #include "resource.h"
 
 #include <windowsx.h> 
@@ -21,6 +22,7 @@
 #include <cctype>
 #include <cwctype>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <wininet.h>
 #include <uxtheme.h>
@@ -272,7 +274,7 @@ static std::wstring GetNowPlayingTitleText()
         return playlist[g_currentlyPlayingIndex].name;
     }
 
-    return L"Нет данных о треке";
+    return Tr("nowplaying.no_data", L"Нет данных о треке");
 }
 
 static void CleanupTrackToastSdl()
@@ -614,7 +616,7 @@ static void ShowTrackToastIfNeeded(HWND hOwner)
     }
 
     g_trackToastTitle = GetNowPlayingTitleText();
-    if (g_trackToastTitle.empty() || g_trackToastTitle == L"Нет данных о треке") {
+    if (g_trackToastTitle.empty() || g_trackToastTitle == Tr("nowplaying.no_data", L"Нет данных о треке")) {
         return;
     }
 
@@ -789,6 +791,12 @@ static bool IsInterestingFfmpegStatusLine(const std::string& lower)
 
 static HWND CreateTooltipWindow(HWND hParent)
 {
+    static const wchar_t kTooltipProp[] = L"IRPFFmpegTooltipWindow";
+    if (HWND hOldTooltip = reinterpret_cast<HWND>(GetPropW(hParent, kTooltipProp))) {
+        DestroyWindow(hOldTooltip);
+        RemovePropW(hParent, kTooltipProp);
+    }
+
     HWND hTooltip = CreateWindowExW(
         WS_EX_TOPMOST,
         TOOLTIPS_CLASSW,
@@ -807,6 +815,7 @@ static HWND CreateTooltipWindow(HWND hParent)
         SendMessageW(hTooltip, TTM_SETMAXTIPWIDTH, 0, 360);
         SendMessageW(hTooltip, TTM_SETDELAYTIME, TTDT_INITIAL, 450);
         SendMessageW(hTooltip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 8000);
+        SetPropW(hParent, kTooltipProp, reinterpret_cast<HANDLE>(hTooltip));
     }
 
     return hTooltip;
@@ -833,40 +842,96 @@ static void AddDlgItemTooltip(HWND hTooltip, HWND hDlg, int controlId, const wch
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, controlId), text);
 }
 
+static void SetupMainDialogTooltips(HWND hDlg);
+
+static void PopulateLanguageCombo(HWND hDlg)
+{
+    HWND hCombo = GetDlgItem(hDlg, IDC_COMBO_LANGUAGE);
+    if (!hCombo) {
+        return;
+    }
+
+    LoadAvailableLanguages();
+    const auto& languageOptions = GetAvailableLanguages();
+    SendMessageW(hCombo, CB_RESETCONTENT, 0, 0);
+
+    int selectedIndex = 0;
+    for (size_t i = 0; i < languageOptions.size(); ++i) {
+        int idx = static_cast<int>(SendMessageW(hCombo, CB_ADDSTRING, 0,
+            reinterpret_cast<LPARAM>(languageOptions[i].displayName.c_str())));
+        SendMessageW(hCombo, CB_SETITEMDATA, idx, static_cast<LPARAM>(i));
+        if (languageOptions[i].id == g_languageId) {
+            selectedIndex = idx;
+        }
+    }
+
+    if (!languageOptions.empty()) {
+        SendMessageW(hCombo, CB_SETCURSEL, selectedIndex, 0);
+    }
+}
+
+static void ApplySettingsDialogLanguage(HWND hDlg)
+{
+    SetWindowTextW(hDlg, Tr("settings.title", L"Настройки"));
+    SetDlgItemTextW(hDlg, IDC_SETTINGWND_TITLE, Tr("settings.title", L"Настройки"));
+    SetDlgItemTextW(hDlg, IDOK, Tr("settings.ok", L"OK"));
+    SetDlgItemTextW(hDlg, IDC_GROUP_RECORDING, Tr("settings.group.recording", L" Режимы записи "));
+    SetDlgItemTextW(hDlg, IDC_GROUP_EFFECTS, Tr("settings.group.effects", L" Эффекты воспроизведения "));
+    SetDlgItemTextW(hDlg, IDC_GROUP_PROGRAM, Tr("settings.group.program", L" Настройки программы "));
+    SetDlgItemTextW(hDlg, IDC_STATIC_LANGUAGE, Tr("settings.language", L"Язык:"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_MP3, Tr("settings.recording.mp3", L" MP3, LAME, 320 kbit/sec"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_FLAC, Tr("settings.recording.flac", L" FLAC, s16, ~1000 kbit/sec"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_STEREO_WIDTH, Tr("settings.effect.stereo_width", L" Расширение Стерео"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_EXCITER, Tr("settings.effect.exciter", L" Exciter / Яркость"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_DEEP_BASS, Tr("settings.effect.deep_bass", L" DeepBass / Глубокий Бас"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, Tr("settings.effect.dynamic_auto_volume", L" Динамическая Регулировка Усиления"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, Tr("settings.effect.gain_rider", L" GainRider / Контроль Пиков"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, Tr("settings.program.minimize_to_tray", L" При минимизации отправлять в трей"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, Tr("settings.program.show_track_toast", L" В трее показывать обложку при смене трека"));
+}
+
+static void ApplyMainDialogLanguage(HWND hDlg)
+{
+    if (hDlg) {
+        SetWindowTextW(hDlg, L"IRP+ffmpeG");
+        SetupMainDialogTooltips(hDlg);
+    }
+}
+
 static void SetupMainDialogTooltips(HWND hDlg)
 {
     HWND hTooltip = CreateTooltipWindow(hDlg);
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_PP, L"Воспроизвести или остановить текущую станцию");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_REV, L"Перейти к предыдущей станции в списке");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_FORV, L"Перейти к следующей станции в списке");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_PREVIOUS_STATION, L"Вернуться к ранее звучавшей станции");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_REC, L"Начать или остановить запись текущего потока");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_ST_SETTING, L"Открыть настройки программы");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_BASS, L"Низкие Частоты");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_HI, L"Высокие Частоты");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_VOL, L"Громкость");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_PP, Tr("tooltip.play_stop", L"Воспроизвести или остановить текущую станцию"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_REV, Tr("tooltip.prev_station", L"Перейти к предыдущей станции в списке"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_FORV, Tr("tooltip.next_station", L"Перейти к следующей станции в списке"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_PREVIOUS_STATION, Tr("tooltip.previous_station", L"Вернуться к ранее звучавшей станции"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_REC, Tr("tooltip.record", L"Начать или остановить запись текущего потока"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_ST_SETTING, Tr("tooltip.settings", L"Открыть настройки программы"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_BASS, Tr("tooltip.slider.bass", L"Низкие Частоты"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_HI, Tr("tooltip.slider.treble", L"Высокие Частоты"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_VOL, Tr("tooltip.slider.volume", L"Громкость"));
 }
 
 static void SetupSettingsDialogTooltips(HWND hDlg)
 {
     HWND hTooltip = CreateTooltipWindow(hDlg);
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_MP3, L"Записывать поток в MP3 320 kbit/sec");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_FLAC, L"Записывать поток в FLAC без потерь");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_STEREO_WIDTH, L"Включить расширение стереобазы");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_EXCITER, L"Добавить яркость и выразительность верхним частотам");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_DEEP_BASS, L"Усилить глубину низких частот");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, L"Автоматически выравнивать громкость воспроизведения");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, L"Контролировать пики и удерживать комфортный уровень сигнала");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, L"При нажатии кнопки свернуть прятать программу в трей");
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_SHOW_TRACK_TOAST, L"Когда программа в трее, показывать обложку при смене трека");
-    AddDlgItemTooltip(hTooltip, hDlg, IDOK, L"Сохранить настройки и закрыть окно");
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_MP3, Tr("tooltip.recording.mp3", L"Записывать поток в MP3 320 kbit/sec"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_FLAC, Tr("tooltip.recording.flac", L"Записывать поток в FLAC без потерь"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_STEREO_WIDTH, Tr("tooltip.effect.stereo_width", L"Включить расширение стереобазы"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_EXCITER, Tr("tooltip.effect.exciter", L"Добавить яркость и выразительность верхним частотам"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_DEEP_BASS, Tr("tooltip.effect.deep_bass", L"Усилить глубину низких частот"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, Tr("tooltip.effect.dynamic_auto_volume", L"Автоматически выравнивать громкость воспроизведения"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, Tr("tooltip.effect.gain_rider", L"Контролировать пики и удерживать комфортный уровень сигнала"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, Tr("tooltip.program.minimize_to_tray", L"При нажатии кнопки свернуть прятать программу в трей"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_SHOW_TRACK_TOAST, Tr("tooltip.program.show_track_toast", L"Когда программа в трее, показывать обложку при смене трека"));
+    AddDlgItemTooltip(hTooltip, hDlg, IDOK, Tr("tooltip.settings.ok", L"Сохранить настройки и закрыть окно"));
 }
 
 static void SetupAddStationDialogTooltips(HWND hDlg, HWND hOk, HWND hCancel)
 {
     HWND hTooltip = CreateTooltipWindow(hDlg);
-    AddTooltip(hTooltip, hDlg, hOk, L"Добавить станцию в список");
-    AddTooltip(hTooltip, hDlg, hCancel, L"Закрыть окно без добавления станции");
+    AddTooltip(hTooltip, hDlg, hOk, Tr("tooltip.add.ok", L"Добавить станцию в список"));
+    AddTooltip(hTooltip, hDlg, hCancel, Tr("tooltip.add.cancel", L"Закрыть окно без добавления станции"));
 }
 
 static std::wstring TranslateFfmpegStatusLine(const std::string& line)
@@ -1367,8 +1432,8 @@ static void ShowTrayBalloon(HWND hWnd)
     NOTIFYICONDATAW nid = {};
     FillTrayIconData(hWnd, nid);
     nid.uFlags |= NIF_INFO;
-    wcscpy_s(nid.szInfoTitle, L"IRP+ffmpeG работает в трее");
-    wcscpy_s(nid.szInfo, L"Дважды щелкните значок, чтобы вернуть окно. Для выхода используйте меню трея.");
+    wcscpy_s(nid.szInfoTitle, Tr("tray.balloon.title", L"IRP+ffmpeG работает в трее"));
+    wcscpy_s(nid.szInfo, Tr("tray.balloon.text", L"Дважды щелкните значок, чтобы вернуть окно. Для выхода используйте меню трея."));
     nid.dwInfoFlags = NIIF_INFO;
     Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
@@ -1434,41 +1499,41 @@ static void ShowTrayContextMenu(HWND hWnd)
         return;
     }
 
-    AppendMenuW(hMenu, MF_STRING, IDM_TRAY_RESTORE, L"Открыть IRP+ffmpeG");
+    AppendMenuW(hMenu, MF_STRING, IDM_TRAY_RESTORE, Tr("tray.restore", L"Открыть IRP+ffmpeG"));
     HBITMAP hOpenIcon = CreateMenuGlyphBitmap(hWnd, L"\uE8A7");
     SetMenuItemBitmapByCommand(hMenu, IDM_TRAY_RESTORE, hOpenIcon);
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
-    AppendMenuW(hMenu, MF_STRING, IDC_BUTTON_PP, running.load() ? L"Остановить" : L"Воспроизвести");
+    AppendMenuW(hMenu, MF_STRING, IDC_BUTTON_PP, running.load() ? Tr("tray.stop", L"Остановить") : Tr("tray.play", L"Воспроизвести"));
     HBITMAP hPlayIcon = CreateMenuGlyphBitmap(hWnd, running.load() ? L"\uE769" : L"\uE768");
     SetMenuItemBitmapByCommand(hMenu, IDC_BUTTON_PP, hPlayIcon);
 
-    AppendMenuW(hMenu, MF_STRING, IDC_BUTTON_REV, L"Предыдущая станция");
+    AppendMenuW(hMenu, MF_STRING, IDC_BUTTON_REV, Tr("tray.prev", L"Предыдущая станция"));
     HBITMAP hPrevIcon = CreateMenuGlyphBitmap(hWnd, L"\uE892");
     SetMenuItemBitmapByCommand(hMenu, IDC_BUTTON_REV, hPrevIcon);
 
-    AppendMenuW(hMenu, MF_STRING, IDC_BUTTON_FORV, L"Следующая станция");
+    AppendMenuW(hMenu, MF_STRING, IDC_BUTTON_FORV, Tr("tray.next", L"Следующая станция"));
     HBITMAP hNextIcon = CreateMenuGlyphBitmap(hWnd, L"\uE893");
     SetMenuItemBitmapByCommand(hMenu, IDC_BUTTON_FORV, hNextIcon);
 
-    AppendMenuW(hMenu, MF_STRING, IDC_BUTTON_PREVIOUS_STATION, L"Вернуться к прошлой станции");
+    AppendMenuW(hMenu, MF_STRING, IDC_BUTTON_PREVIOUS_STATION, Tr("tray.previous", L"Вернуться к прошлой станции"));
     HBITMAP hBackIcon = CreateMenuGlyphBitmap(hWnd, L"\uE72B");
     SetMenuItemBitmapByCommand(hMenu, IDC_BUTTON_PREVIOUS_STATION, hBackIcon);
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
-    AppendMenuW(hMenu, MF_STRING, IDC_ST_SETTING, L"Настройки");
+    AppendMenuW(hMenu, MF_STRING, IDC_ST_SETTING, Tr("tray.settings", L"Настройки"));
     HBITMAP hSettingsIcon = CreateMenuGlyphBitmap(hWnd, L"\uE713");
     SetMenuItemBitmapByCommand(hMenu, IDC_ST_SETTING, hSettingsIcon);
 
-    AppendMenuW(hMenu, MF_STRING, IDM_ABOUT, L"О программе");
+    AppendMenuW(hMenu, MF_STRING, IDM_ABOUT, Tr("tray.about", L"О программе"));
     HBITMAP hAboutIcon = CreateMenuGlyphBitmap(hWnd, L"\uE946");
     SetMenuItemBitmapByCommand(hMenu, IDM_ABOUT, hAboutIcon);
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
-    AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"Выход");
+    AppendMenuW(hMenu, MF_STRING, IDM_EXIT, Tr("tray.exit", L"Выход"));
     HBITMAP hExitIcon = CreateMenuGlyphBitmap(hWnd, L"\uE8BB");
     SetMenuItemBitmapByCommand(hMenu, IDM_EXIT, hExitIcon);
 
@@ -1506,7 +1571,7 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
     case WM_INITDIALOG:
     {
         HWND hTooltip = CreateTooltipWindow(hDlg);
-        AddDlgItemTooltip(hTooltip, hDlg, IDOK, L"Закрыть окно информации о программе");
+        AddDlgItemTooltip(hTooltip, hDlg, IDOK, Tr("tooltip.about.ok", L"Закрыть окно информации о программе"));
         return (INT_PTR)TRUE;
     }
 
@@ -1595,30 +1660,30 @@ static bool ValidateNewStationInput(HWND hDlg, HWND hNameEdit, HWND hUrlEdit, Pl
     std::wstring url = TrimWide(GetWindowTextString(hUrlEdit));
 
     if (name.empty()) {
-        MessageBoxW(hDlg, L"Введите название станции.", L"Добавить станцию", MB_OK | MB_ICONWARNING);
+        MessageBoxW(hDlg, Tr("add.msg.enter_name", L"Введите название станции."), Tr("add.title", L"Добавить станцию"), MB_OK | MB_ICONWARNING);
         SetFocus(hNameEdit);
         return false;
     }
     if (HasLineBreaks(name) || HasLineBreaks(url)) {
-        MessageBoxW(hDlg, L"Название и URL должны быть записаны в одну строку.", L"Добавить станцию", MB_OK | MB_ICONWARNING);
+        MessageBoxW(hDlg, Tr("add.msg.one_line", L"Название и URL должны быть записаны в одну строку."), Tr("add.title", L"Добавить станцию"), MB_OK | MB_ICONWARNING);
         return false;
     }
     if (url.empty()) {
-        MessageBoxW(hDlg, L"Введите интернет адрес станции.", L"Добавить станцию", MB_OK | MB_ICONWARNING);
+        MessageBoxW(hDlg, Tr("add.msg.enter_url", L"Введите интернет адрес станции."), Tr("add.title", L"Добавить станцию"), MB_OK | MB_ICONWARNING);
         SetFocus(hUrlEdit);
         return false;
     }
     if (!IsSupportedPlaylistUrlW(url)) {
         MessageBoxW(hDlg,
-            L"Некорректный URL. Поддерживаются адреса вида http://, https://, icy://, mms:// или rtsp:// без пробелов.",
-            L"Добавить станцию", MB_OK | MB_ICONWARNING);
+            Tr("add.msg.invalid_supported_url", L"Некорректный URL. Поддерживаются адреса вида http://, https://, icy://, mms:// или rtsp:// без пробелов."),
+            Tr("add.title", L"Добавить станцию"), MB_OK | MB_ICONWARNING);
         SetFocus(hUrlEdit);
         return false;
     }
 
     for (const PlaylistItem& existing : playlist) {
         if (TrimWide(existing.url) == url) {
-            MessageBoxW(hDlg, L"Станция с таким URL уже есть в плейлисте.", L"Добавить станцию", MB_OK | MB_ICONWARNING);
+            MessageBoxW(hDlg, Tr("add.msg.duplicate_url", L"Станция с таким URL уже есть в плейлисте."), Tr("add.title", L"Добавить станцию"), MB_OK | MB_ICONWARNING);
             SetFocus(hUrlEdit);
             return false;
         }
@@ -1670,9 +1735,9 @@ static LRESULT CALLBACK AddStationDialogProc(HWND hWnd, UINT msg, WPARAM wParam,
         state->hFont = CreateAddStationDialogFont(hWnd, state->fontPointSize);
         HFONT hFont = state->hFont ? state->hFont : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
-        HWND hLabelName = CreateWindowExW(0, L"STATIC", L"Название станции:",
+        HWND hLabelName = CreateWindowExW(0, L"STATIC", Tr("add.name_label", L"Название станции:"),
             WS_CHILD | WS_VISIBLE, 16, 18, 128, 20, hWnd, nullptr, GetModuleHandle(NULL), nullptr);
-        HWND hLabelUrl = CreateWindowExW(0, L"STATIC", L"URL - адрес:",
+        HWND hLabelUrl = CreateWindowExW(0, L"STATIC", Tr("add.url_label", L"URL - адрес:"),
             WS_CHILD | WS_VISIBLE, 16, 56, 128, 20, hWnd, nullptr, GetModuleHandle(NULL), nullptr);
 
         state->hNameEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
@@ -1682,10 +1747,10 @@ static LRESULT CALLBACK AddStationDialogProc(HWND hWnd, UINT msg, WPARAM wParam,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
             150, 54, 292, 24, hWnd, (HMENU)IDC_EDIT_ADD_STATION_URL, GetModuleHandle(NULL), nullptr);
 
-        HWND hOk = CreateWindowExW(0, L"BUTTON", L"OK",
+        HWND hOk = CreateWindowExW(0, L"BUTTON", Tr("common.ok", L"OK"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
             262, 104, 82, 28, hWnd, (HMENU)IDOK, GetModuleHandle(NULL), nullptr);
-        HWND hCancel = CreateWindowExW(0, L"BUTTON", L"Отмена",
+        HWND hCancel = CreateWindowExW(0, L"BUTTON", Tr("common.cancel", L"Отмена"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             360, 104, 82, 28, hWnd, (HMENU)IDCANCEL, GetModuleHandle(NULL), nullptr);
 
@@ -1748,7 +1813,7 @@ static bool ShowAddStationDialog(HWND hOwner, PlaylistItem& item)
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         wc.lpszClassName = kClassName;
         if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-            MessageBoxW(hOwner, L"Не удалось создать форму добавления станции.", L"Добавить станцию", MB_OK | MB_ICONERROR);
+            MessageBoxW(hOwner, Tr("add.msg.create_failed", L"Не удалось создать форму добавления станции."), Tr("add.title", L"Добавить станцию"), MB_OK | MB_ICONERROR);
             return false;
         }
         registered = true;
@@ -1766,7 +1831,7 @@ static bool ShowAddStationDialog(HWND hOwner, PlaylistItem& item)
     HWND hDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
         kClassName,
-        L"Добавить станцию",
+        Tr("add.title", L"Добавить станцию"),
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
         x, y, width, height,
         hOwner,
@@ -1775,7 +1840,7 @@ static bool ShowAddStationDialog(HWND hOwner, PlaylistItem& item)
         &state);
 
     if (!hDlg) {
-        MessageBoxW(hOwner, L"Не удалось открыть форму добавления станции.", L"Добавить станцию", MB_OK | MB_ICONERROR);
+        MessageBoxW(hOwner, Tr("add.msg.open_failed", L"Не удалось открыть форму добавления станции."), Tr("add.title", L"Добавить станцию"), MB_OK | MB_ICONERROR);
         return false;
     }
 
@@ -2172,6 +2237,9 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             }
         }
 
+        ApplySettingsDialogLanguage(hDlg);
+        PopulateLanguageCombo(hDlg);
+
         //начальные состояния чекбоксов
         SendDlgItemMessageW(hDlg, IDC_CHECK_FLAC, BM_SETCHECK, rec_is_flac ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_MP3, BM_SETCHECK, rec_is_flac ? BST_UNCHECKED : BST_CHECKED, 0);
@@ -2299,6 +2367,26 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             }
             return (INT_PTR)TRUE;
 
+        case IDC_COMBO_LANGUAGE:
+            if (notif == CBN_SELCHANGE)
+            {
+                HWND hCombo = GetDlgItem(hDlg, IDC_COMBO_LANGUAGE);
+                int sel = hCombo ? static_cast<int>(SendMessageW(hCombo, CB_GETCURSEL, 0, 0)) : CB_ERR;
+                if (sel != CB_ERR) {
+                    LRESULT itemData = SendMessageW(hCombo, CB_GETITEMDATA, sel, 0);
+                    const auto& languageOptions = GetAvailableLanguages();
+                    if (itemData >= 0 && static_cast<size_t>(itemData) < languageOptions.size()) {
+                        if (LoadLanguageById(languageOptions[static_cast<size_t>(itemData)].id)) {
+                            SaveLanguageSelection();
+                            ApplySettingsDialogLanguage(hDlg);
+                            SetupSettingsDialogTooltips(hDlg);
+                            ApplyMainDialogLanguage(g_hMainWnd);
+                        }
+                    }
+                }
+            }
+            return (INT_PTR)TRUE;
+
         case IDC_EDIT_STEREO_WIDTH:
             if (notif == EN_CHANGE) {
                 SyncStereoWidthPercentFromDialog(hDlg, false);
@@ -2390,6 +2478,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
     switch (message)
     {
     case WM_INITDIALOG: {
+        InitializeLanguageSystem();
         av_log_set_level(AV_LOG_INFO);
         av_log_set_callback(FfmpegLogCallback);
 
@@ -3012,19 +3101,19 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
             HMENU hPopup = CreatePopupMenu();
             if (hPopup) {
-                AppendMenuW(hPopup, MF_STRING, IDC_BUTTON_RELOAD_M3U, L"Обновить m3u");
+                AppendMenuW(hPopup, MF_STRING, IDC_BUTTON_RELOAD_M3U, Tr("context.reload_m3u", L"Обновить m3u"));
                 HBITMAP hReloadIcon = CreateMenuGlyphBitmap(hDlg, L"\uE72C");
                 SetMenuItemBitmapByCommand(hPopup, IDC_BUTTON_RELOAD_M3U, hReloadIcon);
 
                 AppendMenuW(hPopup, MF_SEPARATOR, 0, nullptr);
-                AppendMenuW(hPopup, MF_STRING, ID_LIST_URL_ADD_STATION, L"Добавить станцию");
+                AppendMenuW(hPopup, MF_STRING, ID_LIST_URL_ADD_STATION, Tr("context.add_station", L"Добавить станцию"));
                 HBITMAP hAddIcon = CreateMenuGlyphBitmap(hDlg, L"\uE710");
                 SetMenuItemBitmapByCommand(hPopup, ID_LIST_URL_ADD_STATION, hAddIcon);
 
                 HBITMAP hDeleteIcon = nullptr;
                 if (itemIndex >= 0) {
                     AppendMenuW(hPopup, MF_SEPARATOR, 0, nullptr);
-                    AppendMenuW(hPopup, MF_STRING, ID_LIST_URL_DELETE_STATION, L"Удалить станцию");
+                    AppendMenuW(hPopup, MF_STRING, ID_LIST_URL_DELETE_STATION, Tr("context.delete_station", L"Удалить станцию"));
                     hDeleteIcon = CreateMenuGlyphBitmap(hDlg, L"\uE74D");
                     SetMenuItemBitmapByCommand(hPopup, ID_LIST_URL_DELETE_STATION, hDeleteIcon);
                 }

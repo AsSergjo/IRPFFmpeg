@@ -42,6 +42,11 @@
 #define IDC_BUTTON_PREVIOUS_STATION     1026
 #define IDC_CHECK_MINIMIZE_TO_TRAY      1027
 #define IDC_CHECK_SHOW_TRACK_TOAST      1028
+#define IDC_COMBO_LANGUAGE              1029
+#define IDC_STATIC_LANGUAGE             1030
+#define IDC_GROUP_RECORDING             1031
+#define IDC_GROUP_EFFECTS               1032
+#define IDC_GROUP_PROGRAM               1033
 #define ID_LISTBOX_COPY                 32771
 #define ID_LIST_URL_DELETE_STATION      32772
 #define ID_LIST_URL_ADD_STATION         32773
@@ -54,7 +59,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        132
 #define _APS_NEXT_COMMAND_VALUE         32775
-#define _APS_NEXT_CONTROL_VALUE         1029
+#define _APS_NEXT_CONTROL_VALUE         1034
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif
