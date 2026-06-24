@@ -23,6 +23,10 @@ IRPFFmpeg-vX.Y.Z-win-x64.zip
   LICENSE
   THIRD_PARTY_NOTICES.md
   playlist.m3u
+  app.dat
+  Language/
+    english.lng
+    russian.lng
   heap_dll/
     avcodec-62.dll
     avfilter-11.dll
@@ -50,10 +54,11 @@ IRPFFmpeg-vX.Y.Z-win-x64.zip
 
 - `.pdb`, `.obj`, `.tlog`, `.log`;
 - `.vs/`;
-- `app.dat`;
 - `cover_cache/`;
 - `Rec/`;
 - личные плейлисты, если они не должны быть публичными.
+
+`app.dat` можно включать в архив, если он подготовлен как стартовое состояние приложения для пользователей. Перед публикацией проверьте, что в нем нет личных или тестовых данных.
 
 ## Лицензии в релизе
 
