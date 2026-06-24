@@ -2,6 +2,7 @@
 #include "audio_dsp.h"
 #include "IRPFFmpeg.h"
 #include "file_recording.h"
+#include "language_manager.h"
 #include "metadata_decode.h"
 #include "resource.h"
 #include <fstream>
@@ -250,6 +251,26 @@ std::wstring read_wstring(std::ifstream& ifs) {
     return std::wstring(buffer.begin(), buffer.end());
 }
 
+static bool read_wstring_limited(std::ifstream& ifs, std::wstring& value, size_t maxLen)
+{
+    size_t len = 0;
+    ifs.read(reinterpret_cast<char*>(&len), sizeof(len));
+    if (ifs.fail() || ifs.gcount() != sizeof(len) || len > maxLen) {
+        return false;
+    }
+
+    std::vector<wchar_t> buffer(len);
+    if (len > 0) {
+        ifs.read(reinterpret_cast<char*>(buffer.data()), len * sizeof(wchar_t));
+        if (ifs.fail() || ifs.gcount() != static_cast<std::streamsize>(len * sizeof(wchar_t))) {
+            return false;
+        }
+    }
+
+    value.assign(buffer.begin(), buffer.end());
+    return true;
+}
+
 
 void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistItem>& playlist, int selectedIndex) {
     std::ofstream ofs(filename, std::ios::binary);
@@ -289,6 +310,7 @@ void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistI
     ofs.write(reinterpret_cast<const char*>(&g_trackToastPositionSaved), sizeof(g_trackToastPositionSaved));
     ofs.write(reinterpret_cast<const char*>(&g_trackToastX), sizeof(g_trackToastX));
     ofs.write(reinterpret_cast<const char*>(&g_trackToastY), sizeof(g_trackToastY));
+    write_wstring(ofs, g_languageId);
 
 
 }
@@ -439,6 +461,14 @@ bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>
     ifs.read(reinterpret_cast<char*>(&trackToastY), sizeof(trackToastY));
     if (!ifs.fail()) {
         g_trackToastY = trackToastY;
+    }
+    else {
+        ifs.clear();
+    }
+
+    std::wstring languageId;
+    if (read_wstring_limited(ifs, languageId, 64)) {
+        g_languageId = languageId;
     }
     else {
         ifs.clear();
@@ -1886,7 +1916,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
 
                     if (reconnect_attempts < MAX_RECONNECT_ATTEMPTS) {
                         // Wait before retrying??
-                        PostFfmpegStatus(L"Ошибка чтения потока. Переподключение...");
+                        PostFfmpegStatus(TrString("status.stream_read_error_reconnect", L"Ошибка чтения потока. Переподключение..."));
                         const int nextAttempt = ++reconnect_attempts;
                         if (WaitBeforePlaybackReconnect(playbackGeneration)) {
                             PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, nextAttempt);
@@ -1896,7 +1926,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                     }
                     else {
                         //слишком много ошибок
-                        PostFfmpegStatus(L"Ошибка потока: превышено число попыток переподключения");
+                        PostFfmpegStatus(TrString("status.stream_reconnect_attempts_exceeded", L"Ошибка потока: превышено число попыток переподключения"));
                         if (WaitBeforePlaybackReconnect(playbackGeneration)) {
                             running.store(false);
                             g_quit_flag.store(true);
@@ -2169,7 +2199,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                             hr0 = audioClient->GetCurrentPadding(&padding);
 
                             if (hr0 == AUDCLNT_E_DEVICE_INVALIDATED) {
-                                PostFfmpegStatus(L"Аудиоустройство изменено, переинициализация...");
+                                PostFfmpegStatus(TrString("status.audio_device_changed", L"Аудиоустройство изменено, переинициализация..."));
                                 av_free(converted_buffer);
                                 av_packet_free(&packet);
                                 av_frame_free(&frame);

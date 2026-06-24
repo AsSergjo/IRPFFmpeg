@@ -12,7 +12,7 @@ extern std::wstring g_languageId;
 
 void InitializeLanguageSystem();
 bool LoadLanguageById(const std::wstring& languageId);
-void SaveLanguageSelection();
 void LoadAvailableLanguages();
 const std::vector<LanguageOption>& GetAvailableLanguages();
 const wchar_t* Tr(const char* key, const wchar_t* fallback);
+std::wstring TrString(const char* key, const wchar_t* fallback);

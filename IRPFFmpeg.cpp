@@ -153,6 +153,7 @@ static bool g_trayIconAdded = false;
 static bool g_isInTray = false;
 static bool g_trayHideBalloonShown = false;
 static bool g_restoringFromTray = false;
+static bool g_minimizeToTrayFromCaptionButton = false;
 static HWND g_hTrackToast = nullptr;
 static HWND g_hTrackToastText = nullptr;
 static std::wstring g_trackToastTitle;
@@ -689,7 +690,7 @@ static void ShowTrackToastIfNeeded(HWND hOwner)
 
 static bool IsTransientPlaybackStatus(const std::wstring& status)
 {
-    if (status.empty() || status == L"Остановлено") {
+    if (status.empty() || status == TrString("status.stopped", L"Остановлено")) {
         return false;
     }
 
@@ -708,7 +709,18 @@ static bool IsTransientPlaybackStatus(const std::wstring& status)
         L"таймаут",
         L"Переподключение",
         L"Попытка",
-        L"Аудиоустройство"
+        L"Аудиоустройство",
+        L"Connecting",
+        L"Reading",
+        L"Analyzing",
+        L"Active",
+        L"Error",
+        L"Failed",
+        L"Stream",
+        L"timeout",
+        L"Reconnecting",
+        L"Attempt",
+        L"Audio device"
     };
 
     for (const wchar_t* token : tokens) {
@@ -748,7 +760,7 @@ static std::wstring GetNowPlayingBarText()
     }
 
     if (barText.empty()) {
-        barText = g_nowPlayingStatus.empty() ? L"Остановлено" : g_nowPlayingStatus;
+        barText = g_nowPlayingStatus.empty() ? TrString("status.stopped", L"Остановлено") : g_nowPlayingStatus;
     }
 
     return barText;
@@ -894,6 +906,10 @@ static void ApplyMainDialogLanguage(HWND hDlg)
 {
     if (hDlg) {
         SetWindowTextW(hDlg, L"IRP+ffmpeG");
+        if (g_nowPlayingStatus == L"Остановлено" || g_nowPlayingStatus == L"Stopped") {
+            g_nowPlayingStatus = TrString("status.stopped", L"Остановлено");
+            InvalidateNowPlayingBar(hDlg);
+        }
         SetupMainDialogTooltips(hDlg);
     }
 }
@@ -939,25 +955,25 @@ static std::wstring TranslateFfmpegStatusLine(const std::string& line)
     const std::string lower = ToLowerAsciiCopy(line);
 
     if (lower.find("http/1.1 200 ok") != std::string::npos) {
-        return L"Чтение заголовков (HTTP/1.1 200 OK)";
+        return TrString("status.http_ok", L"Чтение заголовков (HTTP/1.1 200 OK)");
     }
     if (lower.find("reconnect") != std::string::npos || lower.find("retry") != std::string::npos) {
-        return L"FFmpeg: переподключение к потоку...";
+        return TrString("status.ffmpeg_reconnect", L"FFmpeg: переподключение к потоку...");
     }
     if (lower.find("timed out") != std::string::npos || lower.find("timeout") != std::string::npos) {
-        return L"FFmpeg: таймаут сети / ожидание переподключения";
+        return TrString("status.ffmpeg_timeout", L"FFmpeg: таймаут сети / ожидание переподключения");
     }
     if (lower.find("metadata") != std::string::npos || lower.find("icy") != std::string::npos) {
-        return L"FFmpeg: ICY / metadata";
+        return TrString("status.ffmpeg_icy_metadata", L"FFmpeg: ICY / metadata");
     }
     if (lower.find("http") != std::string::npos && lower.find("request") != std::string::npos) {
-        return L"Подключение к URL (HTTP request...)";
+        return TrString("status.http_request", L"Подключение к URL (HTTP request...)");
     }
     if (lower.find("error") != std::string::npos || lower.find("failed") != std::string::npos) {
-        return L"FFmpeg: " + utf8_to_wstring(line);
+        return TrString("status.ffmpeg_prefix", L"FFmpeg: ") + utf8_to_wstring(line);
     }
 
-    return L"FFmpeg: " + utf8_to_wstring(line);
+    return TrString("status.ffmpeg_prefix", L"FFmpeg: ") + utf8_to_wstring(line);
 }
 
 static void FfmpegLogCallback(void* avcl, int level, const char* fmt, va_list vl)
@@ -2377,7 +2393,7 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
                     const auto& languageOptions = GetAvailableLanguages();
                     if (itemData >= 0 && static_cast<size_t>(itemData) < languageOptions.size()) {
                         if (LoadLanguageById(languageOptions[static_cast<size_t>(itemData)].id)) {
-                            SaveLanguageSelection();
+                            savePlaylistToDat(L"app.dat", playlist, g_currentlyPlayingIndex);
                             ApplySettingsDialogLanguage(hDlg);
                             SetupSettingsDialogTooltips(hDlg);
                             ApplyMainDialogLanguage(g_hMainWnd);
@@ -2571,6 +2587,11 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             // If loading from app.dat fails, load from m3u as a fallback
             loadPlaylist(L"playlist.m3u", playlist);
         }
+        if (!LoadLanguageById(g_languageId)) {
+            g_languageId = L"russian";
+            LoadLanguageById(g_languageId);
+        }
+        ApplyMainDialogLanguage(hDlg);
 
         if (IsPlaylistOutdatedAgainstM3U(playlist)) {
             // обновляем данные плейлиста
@@ -2680,11 +2701,29 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
         return (INT_PTR)TRUE;
     }
-    case WM_SIZE:
-        if (wParam == SIZE_MINIMIZED && g_minimizeToTray && !g_isReallyExiting && !g_restoringFromTray) {
-            HideMainWindowToTray(hDlg);
-            return (INT_PTR)TRUE;
+    case WM_NCLBUTTONDOWN:
+        if (wParam == HTMINBUTTON) {
+            g_minimizeToTrayFromCaptionButton = true;
         }
+        break;
+
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xFFF0) == SC_MINIMIZE) {
+            const bool sendToTray = g_minimizeToTrayFromCaptionButton &&
+                g_minimizeToTray &&
+                !g_isReallyExiting &&
+                !g_restoringFromTray;
+            g_minimizeToTrayFromCaptionButton = false;
+
+            if (sendToTray) {
+                HideMainWindowToTray(hDlg);
+                return (INT_PTR)TRUE;
+            }
+        }
+        break;
+
+    case WM_SIZE:
+        g_minimizeToTrayFromCaptionButton = false;
         break;
     case WM_LBUTTONDOWN:
     {
@@ -3618,9 +3657,11 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         int current_trying = (int)lParam;
         //LogToUI("Playback error occurred. Attempting to reconnect... Try #" + std::to_string(current_trying));
         if (current_trying > 0) {
-            wchar_t statusBuf[96];
-            swprintf_s(statusBuf, L"Переподключение... попытка %d из %d", current_trying, MAX_RECONNECT_ATTEMPTS);
-            PostFfmpegStatus(statusBuf);
+            PostFfmpegStatus(
+                TrString("status.reconnect_attempt_prefix", L"Переподключение... попытка ") +
+                std::to_wstring(current_trying) +
+                TrString("status.reconnect_attempt_middle", L" из ") +
+                std::to_wstring(MAX_RECONNECT_ATTEMPTS));
 
             HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
             int selected = ListView_GetSelectionMark(hListView);
@@ -3635,7 +3676,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
         else {
             reconnect_attempts = 0;
-            PostFfmpegStatus(L"Поток недоступен / таймаут подключения");
+            PostFfmpegStatus(TrString("status.stream_unavailable_timeout", L"Поток недоступен / таймаут подключения"));
             UpdatePlayPauseButtonIcon(hDlg);
         }
         return (INT_PTR)TRUE;
@@ -3675,6 +3716,8 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
     {
         switch (LOWORD(lParam))
         {
+        case WM_LBUTTONUP:
+        case NIN_SELECT:
         case WM_LBUTTONDBLCLK:
             RestoreMainWindow(hDlg);
             return (INT_PTR)TRUE;
@@ -3818,18 +3861,24 @@ void PlaybackControlFunction(std::string url) {
             statusUrl = statusUrl.substr(0, 96) + L"...";
         }
         if (reconnect_attempts > 0) {
-            wchar_t statusBuf[160];
-            swprintf_s(statusBuf, L"Переподключение к URL (%s), попытка %d из %d",
-                statusUrl.c_str(), reconnect_attempts, MAX_RECONNECT_ATTEMPTS);
-            PostFfmpegStatus(statusBuf);
+            PostFfmpegStatus(
+                TrString("status.reconnect_url_prefix", L"Переподключение к URL (") +
+                statusUrl +
+                TrString("status.reconnect_url_middle", L"), попытка ") +
+                std::to_wstring(reconnect_attempts) +
+                TrString("status.reconnect_attempt_middle", L" из ") +
+                std::to_wstring(MAX_RECONNECT_ATTEMPTS));
         }
         else {
-            PostFfmpegStatus(L"Подключение к URL (" + statusUrl + L")");
+            PostFfmpegStatus(
+                TrString("status.connect_url_prefix", L"Подключение к URL (") +
+                statusUrl +
+                TrString("status.connect_url_suffix", L")"));
         }
 
         formatCtx = avformat_alloc_context();
         if (!formatCtx) {
-            PostFfmpegStatus(L"FFmpeg: ошибка avformat_alloc_context()");
+            PostFfmpegStatus(TrString("status.avformat_alloc_error", L"FFmpeg: ошибка avformat_alloc_context()"));
             PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
             return;
         }
@@ -3863,13 +3912,16 @@ void PlaybackControlFunction(std::string url) {
         // старый AVFormatContext может продолжать отдавать рваный поток.
         // Переподключением управляет внешний путь WM_APP_PLAYBACK_ERROR.
 
-        PostFfmpegStatus(L"Чтение заголовков потока...");
+        PostFfmpegStatus(TrString("status.reading_stream_headers", L"Чтение заголовков потока..."));
 
         if (avformat_open_input(&formatCtx, radioUrl, nullptr, &options) < 0) {
             av_dict_free(&options);
             if (reconnect_attempts < MAX_RECONNECT_ATTEMPTS) {
                 ++reconnect_attempts;
-                std::wstring str_status = L"Попытка " + std::to_wstring(reconnect_attempts) + L" после таймаута.";
+                std::wstring str_status =
+                    TrString("status.retry_after_timeout_prefix", L"Попытка ") +
+                    std::to_wstring(reconnect_attempts) +
+                    TrString("status.retry_after_timeout_suffix", L" после таймаута.");
                 PostFfmpegStatus(str_status);
                 for (int i = 0; i < 15 && !g_quit_flag.load(); ++i) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -3881,7 +3933,7 @@ void PlaybackControlFunction(std::string url) {
             }
             else {
                 reconnect_attempts = 0;
-                PostFfmpegStatus(L"Поток недоступен: превышено число попыток подключения");
+                PostFfmpegStatus(TrString("status.connection_attempts_exceeded", L"Поток недоступен: превышено число попыток подключения"));
                 for (int i = 0; i < 15 && !g_quit_flag.load(); ++i) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
@@ -3896,22 +3948,22 @@ void PlaybackControlFunction(std::string url) {
         formatCtx->flags |= AVFMT_FLAG_NONBLOCK;
         av_dict_free(&options);
 
-        PostFfmpegStatus(L"Анализ потока и определение формата...");
+        PostFfmpegStatus(TrString("status.analyzing_stream", L"Анализ потока и определение формата..."));
         if (avformat_find_stream_info(formatCtx, nullptr) < 0) {
             avformat_close_input(&formatCtx);
-            PostFfmpegStatus(L"Ошибка чтения заголовков потока");
+            PostFfmpegStatus(TrString("status.stream_header_read_error", L"Ошибка чтения заголовков потока"));
             PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
             return;
         }
 
         if (formatCtx->iformat && formatCtx->iformat->name) {
-            PostFfmpegStatus(L"Используемый демультиплексер: " + utf8_to_wstring(formatCtx->iformat->name));
+            PostFfmpegStatus(TrString("status.demuxer_prefix", L"Используемый демультиплексер: ") + utf8_to_wstring(formatCtx->iformat->name));
         }
 
         int audioStreamIndex = av_find_best_stream(formatCtx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
         if (audioStreamIndex < 0) {
             avformat_close_input(&formatCtx);
-            PostFfmpegStatus(L"Не найден аудиопоток");
+            PostFfmpegStatus(TrString("status.audio_stream_not_found", L"Не найден аудиопоток"));
             PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
             return;
         }
@@ -3927,7 +3979,7 @@ void PlaybackControlFunction(std::string url) {
         UINT32 bufferFrameCount = 0;
 
         if (FAILED(InitWASAPI(audioClient, renderClient, pwfx, bufferFrameCount))) {
-            PostFfmpegStatus(L"Ошибка инициализации аудиовывода");
+            PostFfmpegStatus(TrString("status.audio_output_init_error", L"Ошибка инициализации аудиовывода"));
             avcodec_free_context(&codecCtx);
             avformat_close_input(&formatCtx);
             PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
@@ -3937,7 +3989,7 @@ void PlaybackControlFunction(std::string url) {
 
         SwrContext* swr = InitSwResample(codecCtx, pwfx);
         if (!swr && !CanBypassSwResample(codecCtx, pwfx)) {
-            PostFfmpegStatus(L"Ошибка инициализации ресемплера");
+            PostFfmpegStatus(TrString("status.resampler_init_error", L"Ошибка инициализации ресемплера"));
             CoTaskMemFree(pwfx);
             if (renderClient) renderClient->Release();
             if (audioClient) {
@@ -4072,7 +4124,7 @@ void StopPlayback() {
 
     PostMessageW(g_hMainWnd, WM_APP_ELAPSED_TIME, 0, 0);
 
-    PostFfmpegStatus(L"Остановлено");
+    PostFfmpegStatus(TrString("status.stopped", L"Остановлено"));
 
     StopMetadataTimer();
     ResetMetadataCaches();
@@ -4105,7 +4157,7 @@ static void StopPlaybackAsync() {
     running.store(false);
 
     PostMessageW(g_hMainWnd, WM_APP_ELAPSED_TIME, 0, 0);
-    PostFfmpegStatus(L"Остановлено");
+    PostFfmpegStatus(TrString("status.stopped", L"Остановлено"));
 
     std::thread([]() {
         StopPlayback();

@@ -9,11 +9,21 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <mutex>
 
 std::wstring g_languageId = L"russian";
 
 static std::map<std::string, std::wstring> g_languageStrings;
 static std::vector<LanguageOption> g_languageOptions;
+static std::mutex g_languageMutex;
+
+static constexpr uintmax_t kMaxLanguageFileBytes = 256 * 1024;
+static constexpr size_t kMaxLanguageLineBytes = 4096;
+static constexpr size_t kMaxLanguageEntries = 512;
+static constexpr size_t kMaxLanguageKeyBytes = 128;
+static constexpr size_t kMaxLanguageValueBytes = 3072;
+static constexpr size_t kMaxLanguageIdChars = 64;
+static constexpr size_t kMaxLanguageFiles = 128;
 
 static std::string TrimLanguageAscii(std::string value)
 {
@@ -22,6 +32,40 @@ static std::string TrimLanguageAscii(std::string value)
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
     value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
     return value;
+}
+
+static bool IsValidLanguageId(const std::wstring& id)
+{
+    if (id.empty() || id.size() > kMaxLanguageIdChars || id == L"." || id == L"..") {
+        return false;
+    }
+
+    for (wchar_t ch : id) {
+        const bool isAsciiLetter = (ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z');
+        const bool isDigit = (ch >= L'0' && ch <= L'9');
+        if (!isAsciiLetter && !isDigit && ch != L'_' && ch != L'-') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool IsValidLanguageKey(const std::string& key)
+{
+    if (key.empty() || key.size() > kMaxLanguageKeyBytes) {
+        return false;
+    }
+
+    for (unsigned char ch : key) {
+        const bool isAsciiLetter = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+        const bool isDigit = (ch >= '0' && ch <= '9');
+        if (!isAsciiLetter && !isDigit && ch != '_' && ch != '-' && ch != '.') {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 static std::filesystem::path GetExeDirectory()
@@ -38,11 +82,6 @@ static std::filesystem::path GetExeDirectory()
 static std::filesystem::path GetLanguageDirectory()
 {
     return GetExeDirectory() / L"Language";
-}
-
-static std::filesystem::path GetLanguageSelectionPath()
-{
-    return GetLanguageDirectory() / L"selected.txt";
 }
 
 static const char* GetDefaultRussianLanguageText()
@@ -114,6 +153,34 @@ static const char* GetDefaultRussianLanguageText()
         "add.msg.create_failed=Не удалось создать форму добавления станции.\n"
         "add.msg.open_failed=Не удалось открыть форму добавления станции.\n"
         "nowplaying.no_data=Нет данных о треке\n"
+        "status.stopped=Остановлено\n"
+        "status.http_ok=Чтение заголовков (HTTP/1.1 200 OK)\n"
+        "status.ffmpeg_reconnect=FFmpeg: переподключение к потоку...\n"
+        "status.ffmpeg_timeout=FFmpeg: таймаут сети / ожидание переподключения\n"
+        "status.ffmpeg_icy_metadata=FFmpeg: ICY / metadata\n"
+        "status.http_request=Подключение к URL (HTTP request...)\n"
+        "status.ffmpeg_prefix=FFmpeg: \n"
+        "status.reconnect_attempt_prefix=Переподключение... попытка \n"
+        "status.reconnect_attempt_middle= из \n"
+        "status.stream_unavailable_timeout=Поток недоступен / таймаут подключения\n"
+        "status.reconnect_url_prefix=Переподключение к URL (\n"
+        "status.reconnect_url_middle=), попытка \n"
+        "status.connect_url_prefix=Подключение к URL (\n"
+        "status.connect_url_suffix=)\n"
+        "status.avformat_alloc_error=FFmpeg: ошибка avformat_alloc_context()\n"
+        "status.reading_stream_headers=Чтение заголовков потока...\n"
+        "status.retry_after_timeout_prefix=Попытка \n"
+        "status.retry_after_timeout_suffix= после таймаута.\n"
+        "status.connection_attempts_exceeded=Поток недоступен: превышено число попыток подключения\n"
+        "status.analyzing_stream=Анализ потока и определение формата...\n"
+        "status.stream_header_read_error=Ошибка чтения заголовков потока\n"
+        "status.demuxer_prefix=Используемый демультиплексер: \n"
+        "status.audio_stream_not_found=Не найден аудиопоток\n"
+        "status.audio_output_init_error=Ошибка инициализации аудиовывода\n"
+        "status.resampler_init_error=Ошибка инициализации ресемплера\n"
+        "status.stream_read_error_reconnect=Ошибка чтения потока. Переподключение...\n"
+        "status.stream_reconnect_attempts_exceeded=Ошибка потока: превышено число попыток переподключения\n"
+        "status.audio_device_changed=Аудиоустройство изменено, переинициализация...\n"
         "msg.file_error=File Error\n"
         "msg.playlist_error=Playlist Error\n"
         "msg.sdl_error=SDL Error\n"
@@ -189,6 +256,34 @@ static const char* GetDefaultEnglishLanguageText()
         "add.msg.create_failed=Could not create the add station form.\n"
         "add.msg.open_failed=Could not open the add station form.\n"
         "nowplaying.no_data=No track data\n"
+        "status.stopped=Stopped\n"
+        "status.http_ok=Reading headers (HTTP/1.1 200 OK)\n"
+        "status.ffmpeg_reconnect=FFmpeg: reconnecting to stream...\n"
+        "status.ffmpeg_timeout=FFmpeg: network timeout / waiting to reconnect\n"
+        "status.ffmpeg_icy_metadata=FFmpeg: ICY / metadata\n"
+        "status.http_request=Connecting to URL (HTTP request...)\n"
+        "status.ffmpeg_prefix=FFmpeg: \n"
+        "status.reconnect_attempt_prefix=Reconnecting... attempt \n"
+        "status.reconnect_attempt_middle= of \n"
+        "status.stream_unavailable_timeout=Stream unavailable / connection timeout\n"
+        "status.reconnect_url_prefix=Reconnecting to URL (\n"
+        "status.reconnect_url_middle=), attempt \n"
+        "status.connect_url_prefix=Connecting to URL (\n"
+        "status.connect_url_suffix=)\n"
+        "status.avformat_alloc_error=FFmpeg: avformat_alloc_context() failed\n"
+        "status.reading_stream_headers=Reading stream headers...\n"
+        "status.retry_after_timeout_prefix=Attempt \n"
+        "status.retry_after_timeout_suffix= after timeout.\n"
+        "status.connection_attempts_exceeded=Stream unavailable: connection attempt limit exceeded\n"
+        "status.analyzing_stream=Analyzing stream and detecting format...\n"
+        "status.stream_header_read_error=Failed to read stream headers\n"
+        "status.demuxer_prefix=Active demuxer: \n"
+        "status.audio_stream_not_found=Audio stream not found\n"
+        "status.audio_output_init_error=Audio output initialization failed\n"
+        "status.resampler_init_error=Resampler initialization failed\n"
+        "status.stream_read_error_reconnect=Stream read error. Reconnecting...\n"
+        "status.stream_reconnect_attempts_exceeded=Stream error: reconnect attempt limit exceeded\n"
+        "status.audio_device_changed=Audio device changed, reinitializing...\n"
         "msg.file_error=File Error\n"
         "msg.playlist_error=Playlist Error\n"
         "msg.sdl_error=SDL Error\n"
@@ -219,15 +314,28 @@ static void EnsureDefaultLanguageFiles()
 static std::map<std::string, std::wstring> LoadLanguageFile(const std::filesystem::path& path)
 {
     std::map<std::string, std::wstring> result;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) {
+        return result;
+    }
+
+    const uintmax_t fileSize = std::filesystem::file_size(path, ec);
+    if (ec || fileSize == 0 || fileSize > kMaxLanguageFileBytes) {
+        return result;
+    }
+
     std::ifstream in(path, std::ios::binary);
     if (!in.is_open()) {
         return result;
     }
 
     std::string line;
-    while (std::getline(in, line)) {
+    while (result.size() < kMaxLanguageEntries && std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
+        }
+        if (line.size() > kMaxLanguageLineBytes) {
+            continue;
         }
         if (line.empty() || line[0] == '#' || line[0] == ';') {
             continue;
@@ -246,59 +354,48 @@ static std::map<std::string, std::wstring> LoadLanguageFile(const std::filesyste
             key.erase(0, 3);
         }
 
-        std::string value = line.substr(eq + 1);
-        if (!key.empty()) {
-            result[key] = utf8_to_wstring(value);
+        if (!IsValidLanguageKey(key)) {
+            continue;
         }
+
+        std::string value = line.substr(eq + 1);
+        if (value.size() > kMaxLanguageValueBytes) {
+            value.resize(kMaxLanguageValueBytes);
+        }
+        result[key] = utf8_to_wstring(value);
     }
 
     return result;
 }
 
-static void LoadLanguageSelection()
+static bool HasLanguageIdentity(const std::map<std::string, std::wstring>& strings)
 {
-    std::ifstream in(GetLanguageSelectionPath(), std::ios::binary);
-    if (!in.is_open()) {
-        g_languageId = L"russian";
-        return;
-    }
-
-    std::string value;
-    std::getline(in, value);
-    value = TrimLanguageAscii(value);
-    if (!value.empty()) {
-        g_languageId = utf8_to_wstring(value);
-    }
-}
-
-void SaveLanguageSelection()
-{
-    std::error_code ec;
-    std::filesystem::create_directories(GetLanguageDirectory(), ec);
-
-    std::ofstream out(GetLanguageSelectionPath(), std::ios::binary);
-    if (out.is_open()) {
-        const std::string value = wstring_to_utf8(g_languageId);
-        out.write(value.c_str(), static_cast<std::streamsize>(value.size()));
-    }
+    auto it = strings.find("language.name");
+    return it != strings.end() && !it->second.empty();
 }
 
 bool LoadLanguageById(const std::wstring& languageId)
 {
-    auto strings = LoadLanguageFile(GetLanguageDirectory() / (languageId + L".lng"));
-    if (strings.empty()) {
+    if (!IsValidLanguageId(languageId)) {
         return false;
     }
 
-    g_languageStrings = std::move(strings);
-    g_languageId = languageId;
+    auto strings = LoadLanguageFile(GetLanguageDirectory() / (languageId + L".lng"));
+    if (strings.empty() || !HasLanguageIdentity(strings)) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_languageMutex);
+        g_languageStrings = std::move(strings);
+        g_languageId = languageId;
+    }
     return true;
 }
 
 void InitializeLanguageSystem()
 {
     EnsureDefaultLanguageFiles();
-    LoadLanguageSelection();
     if (!LoadLanguageById(g_languageId)) {
         g_languageId = L"russian";
         LoadLanguageById(g_languageId);
@@ -307,20 +404,40 @@ void InitializeLanguageSystem()
 
 const wchar_t* Tr(const char* key, const wchar_t* fallback)
 {
-    auto it = g_languageStrings.find(key);
-    if (it != g_languageStrings.end()) {
-        return it->second.c_str();
+    thread_local std::wstring translated;
+    translated = TrString(key, fallback);
+    return translated.c_str();
+}
+
+std::wstring TrString(const char* key, const wchar_t* fallback)
+{
+    if (!key) {
+        return fallback ? fallback : L"";
     }
 
-    return fallback;
+    std::lock_guard<std::mutex> lock(g_languageMutex);
+    auto it = g_languageStrings.find(key);
+    if (it != g_languageStrings.end()) {
+        return it->second;
+    }
+
+    return fallback ? fallback : L"";
 }
 
 static std::wstring GetLanguageDisplayName(const std::filesystem::path& path)
 {
     auto strings = LoadLanguageFile(path);
     auto it = strings.find("language.name");
-    if (it != strings.end() && !it->second.empty()) {
+    if (HasLanguageIdentity(strings)) {
         return it->second;
+    }
+
+    const std::wstring id = path.stem().wstring();
+    if (id == L"russian") {
+        return L"Русский";
+    }
+    if (id == L"english") {
+        return L"English";
     }
 
     return path.stem().wstring();
@@ -336,11 +453,25 @@ void LoadAvailableLanguages()
         if (ec) {
             break;
         }
-        if (!entry.is_regular_file() || entry.path().extension() != L".lng") {
+        if (g_languageOptions.size() >= kMaxLanguageFiles) {
+            break;
+        }
+        std::error_code entryEc;
+        if (!entry.is_regular_file(entryEc) || entry.path().extension() != L".lng") {
             continue;
         }
 
-        g_languageOptions.push_back({ entry.path().stem().wstring(), GetLanguageDisplayName(entry.path()) });
+        const std::wstring id = entry.path().stem().wstring();
+        if (!IsValidLanguageId(id)) {
+            continue;
+        }
+
+        auto strings = LoadLanguageFile(entry.path());
+        if (!HasLanguageIdentity(strings)) {
+            continue;
+        }
+
+        g_languageOptions.push_back({ id, strings["language.name"] });
     }
 
     std::sort(g_languageOptions.begin(), g_languageOptions.end(),
