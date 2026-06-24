@@ -316,31 +316,162 @@ static bool EnsureTrackToastSdl(HWND hWnd)
     return true;
 }
 
+static constexpr int kTrackToastTextPaddingX = 12;
+static constexpr int kTrackToastTextPaddingY = 4;
+static constexpr int kTrackToastMaxTextLines = 3;
+
+static std::wstring NormalizeTrackToastTitleText(const std::wstring& text)
+{
+    std::wstring normalized;
+    normalized.reserve(text.size());
+
+    bool previousWasSpace = false;
+    for (wchar_t ch : text) {
+        if (std::iswspace(ch)) {
+            if (!previousWasSpace) {
+                normalized.push_back(L' ');
+                previousWasSpace = true;
+            }
+        }
+        else {
+            normalized.push_back(ch);
+            previousWasSpace = false;
+        }
+    }
+
+    while (!normalized.empty() && normalized.front() == L' ') {
+        normalized.erase(normalized.begin());
+    }
+    while (!normalized.empty() && normalized.back() == L' ') {
+        normalized.pop_back();
+    }
+
+    return normalized;
+}
+
+static int MeasureTrackToastTextWidth(HDC hdc, const std::wstring& text)
+{
+    SIZE size = {};
+    if (text.empty()) {
+        return 0;
+    }
+    GetTextExtentPoint32W(hdc, text.c_str(), static_cast<int>(text.size()), &size);
+    return size.cx;
+}
+
+static std::wstring EllipsizeTrackToastLine(HDC hdc, const std::wstring& text, int maxWidth)
+{
+    static const std::wstring ellipsis = L"...";
+    if (MeasureTrackToastTextWidth(hdc, text) <= maxWidth) {
+        return text;
+    }
+    if (MeasureTrackToastTextWidth(hdc, ellipsis) > maxWidth) {
+        return std::wstring();
+    }
+
+    std::wstring result = text;
+    while (!result.empty()) {
+        result.pop_back();
+        while (!result.empty() && result.back() == L' ') {
+            result.pop_back();
+        }
+
+        std::wstring candidate = result + ellipsis;
+        if (MeasureTrackToastTextWidth(hdc, candidate) <= maxWidth) {
+            return candidate;
+        }
+    }
+
+    return ellipsis;
+}
+
+static std::vector<std::wstring> BuildTrackToastTextLines(HDC hdc, int width)
+{
+    const int maxTextWidth = (std::max)(1, width - kTrackToastTextPaddingX * 2);
+    const std::wstring text = NormalizeTrackToastTitleText(g_trackToastTitle);
+
+    std::vector<std::wstring> words;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t next = text.find(L' ', pos);
+        if (next == std::wstring::npos) {
+            words.push_back(text.substr(pos));
+            break;
+        }
+        if (next > pos) {
+            words.push_back(text.substr(pos, next - pos));
+        }
+        pos = next + 1;
+    }
+
+    std::vector<std::wstring> lines;
+    std::wstring current;
+    size_t wordIndex = 0;
+
+    while (wordIndex < words.size() && lines.size() < kTrackToastMaxTextLines) {
+        const std::wstring& word = words[wordIndex];
+        std::wstring candidate = current.empty() ? word : current + L" " + word;
+
+        if (MeasureTrackToastTextWidth(hdc, candidate) <= maxTextWidth) {
+            current = std::move(candidate);
+            ++wordIndex;
+            continue;
+        }
+
+        if (current.empty()) {
+            lines.push_back(EllipsizeTrackToastLine(hdc, word, maxTextWidth));
+            ++wordIndex;
+        }
+        else {
+            lines.push_back(current);
+            current.clear();
+        }
+    }
+
+    if (!current.empty() && lines.size() < kTrackToastMaxTextLines) {
+        lines.push_back(current);
+    }
+
+    if (wordIndex < words.size() && !lines.empty()) {
+        std::wstring tail = lines.back();
+        for (size_t i = wordIndex; i < words.size(); ++i) {
+            if (!tail.empty()) {
+                tail += L" ";
+            }
+            tail += words[i];
+        }
+        lines.back() = EllipsizeTrackToastLine(hdc, tail, maxTextWidth);
+    }
+
+    if (lines.empty()) {
+        lines.push_back(L"");
+    }
+
+    return lines;
+}
+
+static int GetTrackToastLineHeight(HDC hdc)
+{
+    TEXTMETRICW tm = {};
+    if (GetTextMetricsW(hdc, &tm)) {
+        return tm.tmHeight + tm.tmExternalLeading;
+    }
+    return 18;
+}
+
 static int CalculateTrackToastOverlayHeight(HDC hdc, int width, HFONT hFont)
 {
     HFONT hOldFont = hFont ? (HFONT)SelectObject(hdc, hFont) : nullptr;
 
-    const int lineHeight = 16;
-    const int textPaddingY = 2;
-    const int maxTextHeight = lineHeight * 3;
-
-    RECT calcRect = { 12, 0, width - 12, maxTextHeight };
-    DrawTextW(hdc, g_trackToastTitle.c_str(), -1, &calcRect,
-        DT_CALCRECT | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
-
-    int textHeight = calcRect.bottom - calcRect.top;
-    if (textHeight <= 0) {
-        textHeight = lineHeight;
-    }
-    if (textHeight > maxTextHeight) {
-        textHeight = maxTextHeight;
-    }
+    const int lineHeight = GetTrackToastLineHeight(hdc);
+    const auto lines = BuildTrackToastTextLines(hdc, width);
+    const int textHeight = lineHeight * static_cast<int>(lines.size());
 
     if (hOldFont) {
         SelectObject(hdc, hOldFont);
     }
 
-    return (std::max)(18, textHeight + textPaddingY * 2);
+    return (std::max)(lineHeight + kTrackToastTextPaddingY * 2, textHeight + kTrackToastTextPaddingY * 2);
 }
 
 static HFONT CreateTrackToastTitleFont()
@@ -394,12 +525,25 @@ static void DrawTrackToastText(HWND hWnd, HDC hdc)
 
     HFONT hTitleFont = CreateTrackToastTitleFont();
     HFONT hOldFont = hTitleFont ? (HFONT)SelectObject(hdc, hTitleFont) : nullptr;
-    RECT textRect = { 12, 2, rc.right - 12, rc.bottom - 2 };
 
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, RGB(245, 245, 245));
-    DrawTextW(hdc, g_trackToastTitle.c_str(), -1, &textRect,
-        DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    const auto lines = BuildTrackToastTextLines(hdc, rc.right - rc.left);
+    const int lineHeight = GetTrackToastLineHeight(hdc);
+    int y = kTrackToastTextPaddingY;
+
+    for (const std::wstring& line : lines) {
+        RECT textRect = {
+            kTrackToastTextPaddingX,
+            y,
+            rc.right - kTrackToastTextPaddingX,
+            y + lineHeight
+        };
+        DrawTextW(hdc, line.c_str(), -1, &textRect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        y += lineHeight;
+    }
 
     if (hOldFont) {
         SelectObject(hdc, hOldFont);
