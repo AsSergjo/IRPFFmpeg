@@ -39,7 +39,7 @@ Start_IRPFFmpeg.exe
 
 Рекомендуемая схема загрузки из GitHub Releases:
 
-1. Скачайте support-архив `IRPFFmpeg-v1.0.0-support-win-x64.zip`.
+1. Скачайте support-архив `IRPFFmpeg-v1.0.1-support-win-x64.zip`.
 2. Распакуйте его в отдельную папку.
 3. Скачайте актуальный `IRPFFmpeg.exe` из того же релиза и положите рядом с `Start_IRPFFmpeg.exe`.
 4. Запускайте `Start_IRPFFmpeg.exe`.
