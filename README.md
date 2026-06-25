@@ -1,10 +1,14 @@
 # IRPFFmpeg
 
+[English version](README_ENG.md)
+
 IRPFFmpeg - настольный проигрыватель интернет-радио для Windows. Он воспроизводит сетевые аудиопотоки через FFmpeg, показывает текущий трек, загружает обложки, ведет историю и умеет записывать эфир в MP3 320 kbit/sec или FLAC.
 
 Проект сделан как легкое Win32-приложение на C++17: без Electron, без браузерной оболочки, с отдельным загрузчиком для аккуратной работы с FFmpeg/SDL2 DLL.
 
 ![Главное окно IRPFFmpeg](docs/assets/main-window.png)
+
+![Окно настроек IRPFFmpeg](window_programm_setting.png)
 
 ## Возможности
 

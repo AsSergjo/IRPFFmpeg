@@ -232,6 +232,96 @@ int ScoreDecodedText(const std::wstring& decoded, UINT codePage)
     return score;
 }
 
+void ReplaceAll(std::wstring& text, const std::wstring& from, const std::wstring& to)
+{
+    if (from.empty())
+        return;
+
+    size_t pos = 0;
+    while ((pos = text.find(from, pos)) != std::wstring::npos) {
+        text.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+}
+
+bool TryParseHtmlNumericEntity(const std::wstring& text, size_t ampPos, size_t& endPos, wchar_t& outCh)
+{
+    if (ampPos + 3 >= text.size() || text[ampPos] != L'&' || text[ampPos + 1] != L'#')
+        return false;
+
+    size_t pos = ampPos + 2;
+    int base = 10;
+    if (pos < text.size() && (text[pos] == L'x' || text[pos] == L'X')) {
+        base = 16;
+        ++pos;
+    }
+
+    if (pos >= text.size())
+        return false;
+
+    unsigned value = 0;
+    bool hasDigit = false;
+    for (; pos < text.size(); ++pos) {
+        wchar_t ch = text[pos];
+        if (ch == L';')
+            break;
+
+        int digit = -1;
+        if (ch >= L'0' && ch <= L'9') {
+            digit = ch - L'0';
+        }
+        else if (base == 16 && ch >= L'a' && ch <= L'f') {
+            digit = 10 + ch - L'a';
+        }
+        else if (base == 16 && ch >= L'A' && ch <= L'F') {
+            digit = 10 + ch - L'A';
+        }
+        else {
+            return false;
+        }
+
+        if (digit >= base)
+            return false;
+
+        value = value * base + static_cast<unsigned>(digit);
+        hasDigit = true;
+    }
+
+    if (!hasDigit || pos >= text.size() || text[pos] != L';' || value == 0 || value > 0xFFFF)
+        return false;
+
+    outCh = static_cast<wchar_t>(value);
+    endPos = pos;
+    return true;
+}
+
+void DecodeHtmlNumericEntities(std::wstring& text)
+{
+    std::wstring result;
+    result.reserve(text.size());
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        size_t entityEnd = 0;
+        wchar_t entityCh = 0;
+        if (TryParseHtmlNumericEntity(text, i, entityEnd, entityCh)) {
+            result.push_back(entityCh);
+            i = entityEnd;
+        }
+        else {
+            result.push_back(text[i]);
+        }
+    }
+
+    text.swap(result);
+}
+
+std::wstring PostprocessDecodedMetadata(std::wstring text)
+{
+    DecodeHtmlNumericEntities(text);
+
+    return text;
+}
+
 std::wstring TryRepairUtf8Mojibake(const std::wstring& decoded)
 {
     const int markerCount = CountUtf8MojibakeMarkers(decoded);
@@ -313,23 +403,23 @@ std::wstring DecodeMetadataToWideString(const std::string& str)
     if (!decoded.empty()) {
         std::wstring repaired = TryRepairUtf8Mojibake(decoded);
         if (!repaired.empty())
-            return repaired;
+            return PostprocessDecodedMetadata(repaired);
 
         repaired = TryRepairCp1251Mojibake(decoded);
         if (!repaired.empty())
-            return repaired;
+            return PostprocessDecodedMetadata(repaired);
 
-        return decoded;
+        return PostprocessDecodedMetadata(decoded);
     }
 
     decoded = DecodeSingleByteMetadata(str);
     if (!decoded.empty())
-        return decoded;
+        return PostprocessDecodedMetadata(decoded);
 
     std::wstring fallback;
     fallback.reserve(str.size());
     for (char ch : str)
         fallback.push_back(static_cast<wchar_t>(static_cast<unsigned char>(ch)));
 
-    return fallback;
+    return PostprocessDecodedMetadata(fallback);
 }

@@ -945,6 +945,15 @@ static bool IsInterestingFfmpegStatusLine(const std::string& lower)
            lower.find("network") != std::string::npos;
 }
 
+static bool IsNoisyFfmpegAdvisoryLine(const std::string& lower)
+{
+    return lower.find("if you want to help") != std::string::npos ||
+           lower.find("upload a sample") != std::string::npos ||
+           lower.find("sample of this file") != std::string::npos ||
+           lower.find("ffmpeg-devel") != std::string::npos ||
+           lower.find("ffmpeg.org/bugreports") != std::string::npos;
+}
+
 static HWND CreateTooltipWindow(HWND hParent)
 {
     static const wchar_t kTooltipProp[] = L"IRPFFmpegTooltipWindow";
@@ -1141,6 +1150,9 @@ static void FfmpegLogCallback(void* avcl, int level, const char* fmt, va_list vl
     }
 
     std::string lower = ToLowerAsciiCopy(text);
+    if (IsNoisyFfmpegAdvisoryLine(lower)) {
+        return;
+    }
     if (!IsInterestingFfmpegStatusLine(lower)) {
         return;
     }
@@ -3850,6 +3862,9 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             }
 
             g_nowPlayingElapsed = time_buf;
+            if (running.load() && IsTransientPlaybackStatus(g_nowPlayingStatus)) {
+                g_nowPlayingStatus.clear();
+            }
         }
 
         InvalidateNowPlayingBar(hDlg);
