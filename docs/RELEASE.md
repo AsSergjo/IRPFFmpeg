@@ -14,12 +14,18 @@
 
 ## Состав архива
 
-Рекомендуемый архив:
+Рекомендуемая схема релиза:
+
+- `IRPFFmpeg.exe` - отдельный asset, который обновляется при исправлениях основного приложения.
+- `IRPFFmpeg-vX.Y.Z-support-win-x64.zip` - support-архив без `IRPFFmpeg.exe`; содержит загрузчик, DLL, плейлист, настройки, файлы языка и лицензии.
+
+Так пользователю не нужно скачивать большой архив при каждом мелком исправлении: если support-файлы уже есть, он заменяет только `IRPFFmpeg.exe`.
+
+Состав support-архива:
 
 ```text
-IRPFFmpeg-vX.Y.Z-win-x64.zip
+IRPFFmpeg-vX.Y.Z-support-win-x64.zip
   Start_IRPFFmpeg.exe
-  IRPFFmpeg.exe
   LICENSE
   THIRD_PARTY_NOTICES.md
   playlist.m3u
@@ -88,7 +94,7 @@ IRPFFmpeg-vX.Y.Z-win-x64.zip
 - ...
 
 ### Как запускать
-Распакуйте архив в отдельную папку и запустите `Start_IRPFFmpeg.exe`.
+Распакуйте support-архив, скачайте актуальный `IRPFFmpeg.exe` в ту же папку и запустите `Start_IRPFFmpeg.exe`.
 
 ### Требования
 - Windows 10/11 x64.

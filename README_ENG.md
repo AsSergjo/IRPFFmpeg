@@ -37,7 +37,16 @@ Start_IRPFFmpeg.exe
 
 It is better not to run `IRPFFmpeg.exe` directly: the main application needs libraries from the `heap_dll` folder. The launcher checks for DLLs, temporarily adds `heap_dll` to the child process `PATH` and starts the player.
 
-Minimal release folder layout:
+Recommended download flow from GitHub Releases:
+
+1. Download `IRPFFmpeg-v1.0.0-support-win-x64.zip`.
+2. Extract it to a separate folder.
+3. Download the current `IRPFFmpeg.exe` from the same release and place it next to `Start_IRPFFmpeg.exe`.
+4. Run `Start_IRPFFmpeg.exe`.
+
+The support archive contains libraries, the launcher, playlist, settings and language files. For small fixes, it is usually enough to replace only `IRPFFmpeg.exe`.
+
+Minimal working folder layout after extracting the support archive and adding `IRPFFmpeg.exe`:
 
 ```text
 Start_IRPFFmpeg.exe
@@ -62,7 +71,9 @@ Language/
   russian.lng
 ```
 
-Regular users should download the full IRPFFmpeg archive from GitHub Releases: `heap_dll` should already be prepared there. If you assemble the package manually, use x64 DLLs only and do not mix files from different builds.
+If you already have a working folder with `heap_dll`, `Language`, `playlist.m3u` and `app.dat`, updating usually means downloading the new standalone `IRPFFmpeg.exe` and replacing the old file.
+
+If you assemble the package manually, use x64 DLLs only and do not mix files from different builds.
 
 Where to get DLLs manually:
 
