@@ -69,6 +69,8 @@ HWND g_hNowPlayingBar = NULL;
 // Global variables for Audio Logic
 // ------------------------------- 
 std::atomic<bool> running(false);
+std::atomic_bool g_suppressFfmpegDecoderLog(false);
+std::atomic_bool g_enableDebugLogFile(false);// true - включить логирование в файл debug.log, false - отключить
 std::string current_track;
 std::string current_metadata;
 std::mutex metadata_mutex;
@@ -143,6 +145,7 @@ static std::atomic<bool> g_stopPlaylistNameResolveThread(false);
 static std::atomic<unsigned long> g_playlistNameResolveGeneration(0);
 static std::mutex g_ffmpegStatusMutex;
 static std::string g_lastFfmpegStatusRaw;
+static std::string g_lastFfmpegLogRaw;
 static std::wstring g_nowPlayingTitle;
 static std::wstring g_nowPlayingStatus = L"Остановлено";
 static std::wstring g_nowPlayingStreamInfo;
@@ -217,6 +220,11 @@ static int interrupt_callback(void* ctx) {
 // Logging function
 std::mutex log_mutex;
 void LogToUI(const std::string& message) {
+	// Log to debug log file if enabled
+    if (!g_enableDebugLogFile.load()) {
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(log_mutex);
     std::ofstream log_file("debug_log.txt", std::ios_base::app);
     if (log_file.is_open()) {
@@ -854,6 +862,7 @@ static bool IsTransientPlaybackStatus(const std::wstring& status)
         L"Переподключение",
         L"Попытка",
         L"Аудиоустройство",
+        L"Пропускаем",
         L"Connecting",
         L"Reading",
         L"Analyzing",
@@ -864,7 +873,8 @@ static bool IsTransientPlaybackStatus(const std::wstring& status)
         L"timeout",
         L"Reconnecting",
         L"Attempt",
-        L"Audio device"
+        L"Audio device",
+        L"Skipping"
     };
 
     for (const wchar_t* token : tokens) {
@@ -876,9 +886,17 @@ static bool IsTransientPlaybackStatus(const std::wstring& status)
     return false;
 }
 
+static bool IsBadServerDataStatus(const std::wstring& status)
+{
+    return status == TrString("status.skipping_bad_server_data", L"Пропускаем битые данные от сервера...") ||
+           status == L"Пропускаем битые данные от сервера..." ||
+           status == L"Skipping corrupted data from server...";
+}
+
 static std::wstring GetNowPlayingBarText()
 {
-    if (IsTransientPlaybackStatus(g_nowPlayingStatus)) {
+    const bool appendBadServerDataStatus = IsBadServerDataStatus(g_nowPlayingStatus);
+    if (!appendBadServerDataStatus && IsTransientPlaybackStatus(g_nowPlayingStatus)) {
         return g_nowPlayingStatus;
     }
 
@@ -896,7 +914,14 @@ static std::wstring GetNowPlayingBarText()
         barText += g_limiterRiderStatus;
     }
 
-    if (!g_nowPlayingStreamInfo.empty()) {
+    if (appendBadServerDataStatus) {
+        if (!barText.empty()) {
+            barText += L"   ";
+        }
+        barText += g_nowPlayingStatus;
+    }
+
+    if (!appendBadServerDataStatus && !g_nowPlayingStreamInfo.empty()) {
         if (!barText.empty()) {
             barText += L"   ";
         }
@@ -951,7 +976,29 @@ static bool IsNoisyFfmpegAdvisoryLine(const std::string& lower)
            lower.find("upload a sample") != std::string::npos ||
            lower.find("sample of this file") != std::string::npos ||
            lower.find("ffmpeg-devel") != std::string::npos ||
-           lower.find("ffmpeg.org/bugreports") != std::string::npos;
+           lower.find("ffmpeg.org/bugreports") != std::string::npos ||
+           lower.find("is not implemented") != std::string::npos ||
+           lower.find("update your ffmpeg version") != std::string::npos;
+}
+
+static bool IsNoisyFfmpegDecoderLine(const std::string& lower)
+{
+    return lower.find("header missing") != std::string::npos ||
+           lower.find("big_values too big") != std::string::npos ||
+           lower.find("error while decoding mpeg audio frame") != std::string::npos ||
+           lower.find("invalid new backstep") != std::string::npos ||
+           lower.find("invalid block type") != std::string::npos ||
+           lower.find("switch point in") != std::string::npos;
+}
+
+static const char* FfmpegLogLevelName(int level)
+{
+    if (level <= AV_LOG_PANIC) return "panic";
+    if (level <= AV_LOG_FATAL) return "fatal";
+    if (level <= AV_LOG_ERROR) return "error";
+    if (level <= AV_LOG_WARNING) return "warning";
+    if (level <= AV_LOG_INFO) return "info";
+    return "debug";
 }
 
 static HWND CreateTooltipWindow(HWND hParent)
@@ -1153,6 +1200,18 @@ static void FfmpegLogCallback(void* avcl, int level, const char* fmt, va_list vl
     if (IsNoisyFfmpegAdvisoryLine(lower)) {
         return;
     }
+    if (g_suppressFfmpegDecoderLog.load() && IsNoisyFfmpegDecoderLine(lower)) {
+        return;
+    }
+
+    if (level <= AV_LOG_WARNING) {
+        std::lock_guard<std::mutex> lock(g_ffmpegStatusMutex);
+        if (text != g_lastFfmpegLogRaw) {
+            g_lastFfmpegLogRaw = text;
+            LogToUI(std::string("FFmpeg[") + FfmpegLogLevelName(level) + "]: " + text);
+        }
+    }
+
     if (!IsInterestingFfmpegStatusLine(lower)) {
         return;
     }
@@ -1176,7 +1235,7 @@ extern "C" BOOL CALLBACK SetChildFontProc(HWND hChild, LPARAM lParam) {
 
 // Function prototypes
 void StartPlaybackThread(const char* url);
-void StopPlayback();
+void StopPlayback(bool resetDisplayedBitrate);
 static void StopPlaybackAsync();
 void UpdatePlayingIndicator(int oldIndex, int newIndex);
 void PlayAtIndex(int index, bool resetReconnect = true);
@@ -1635,6 +1694,25 @@ static void RestoreMainWindow(HWND hWnd)
     SetActiveWindow(hWnd);
     SetForegroundWindow(hWnd);
     g_restoringFromTray = false;
+}
+
+static void RestoreMainWindowFromTaskbar(HWND hWnd)
+{
+    if (!hWnd) {
+        return;
+    }
+
+    g_minimizeToTrayFromCaptionButton = false;
+
+    if (g_isInTray) {
+        RestoreMainWindow(hWnd);
+        return;
+    }
+
+    ShowWindow(hWnd, SW_RESTORE);
+    ShowWindow(hWnd, SW_SHOW);
+    BringWindowToTop(hWnd);
+    SetForegroundWindow(hWnd);
 }
 
 static void HideMainWindowToTray(HWND hWnd)
@@ -2864,6 +2942,10 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         break;
 
     case WM_SYSCOMMAND:
+        if ((wParam & 0xFFF0) == SC_RESTORE) {
+            RestoreMainWindowFromTaskbar(hDlg);
+            return (INT_PTR)TRUE;
+        }
         if ((wParam & 0xFFF0) == SC_MINIMIZE) {
             const bool sendToTray = g_minimizeToTrayFromCaptionButton &&
                 g_minimizeToTray &&
@@ -3808,9 +3890,9 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                 UpdateWindow(hRec);  
             }
         }
-        StopPlayback();
         //перезагрузка
         int current_trying = (int)lParam;
+        StopPlayback(current_trying <= 0);
         //LogToUI("Playback error occurred. Attempting to reconnect... Try #" + std::to_string(current_trying));
         if (current_trying > 0) {
             PostFfmpegStatus(
@@ -3862,7 +3944,9 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             }
 
             g_nowPlayingElapsed = time_buf;
-            if (running.load() && IsTransientPlaybackStatus(g_nowPlayingStatus)) {
+            if (running.load() &&
+                !g_suppressFfmpegDecoderLog.load() &&
+                IsTransientPlaybackStatus(g_nowPlayingStatus)) {
                 g_nowPlayingStatus.clear();
             }
         }
@@ -3989,6 +4073,7 @@ void PlaybackControlFunction(std::string url) {
     {
         std::lock_guard<std::mutex> lock(g_ffmpegStatusMutex);
         g_lastFfmpegStatusRaw.clear();
+        g_lastFfmpegLogRaw.clear();
     }
 
     if (url.empty()) {
@@ -4037,6 +4122,7 @@ void PlaybackControlFunction(std::string url) {
 
         formatCtx = avformat_alloc_context();
         if (!formatCtx) {
+            LogToUI("FFmpeg open: avformat_alloc_context failed");
             PostFfmpegStatus(TrString("status.avformat_alloc_error", L"FFmpeg: ошибка avformat_alloc_context()"));
             PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
             return;
@@ -4073,32 +4159,31 @@ void PlaybackControlFunction(std::string url) {
 
         PostFfmpegStatus(TrString("status.reading_stream_headers", L"Чтение заголовков потока..."));
 
-        if (avformat_open_input(&formatCtx, radioUrl, nullptr, &options) < 0) {
+        int openRet = avformat_open_input(&formatCtx, radioUrl, nullptr, &options);
+        if (openRet < 0) {
+            LogToUI("FFmpeg open: avformat_open_input failed: " + av_error_string(openRet) +
+                " (" + std::to_string(openRet) + "), url=" + url_str);
             av_dict_free(&options);
+
             if (reconnect_attempts < MAX_RECONNECT_ATTEMPTS) {
-                ++reconnect_attempts;
+                const int nextAttempt = ++reconnect_attempts;
                 std::wstring str_status =
                     TrString("status.retry_after_timeout_prefix", L"Попытка ") +
-                    std::to_wstring(reconnect_attempts) +
+                    std::to_wstring(nextAttempt) +
                     TrString("status.retry_after_timeout_suffix", L" после таймаута.");
                 PostFfmpegStatus(str_status);
-                for (int i = 0; i < 15 && !g_quit_flag.load(); ++i) {
+
+                for (int i = 0; i < 50 && !g_quit_flag.load(); ++i) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
                 if (g_quit_flag.load() || playbackGeneration != g_playbackGeneration.load()) {
                     return;
                 }
-                PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, reconnect_attempts);
+                PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, nextAttempt);
             }
             else {
                 reconnect_attempts = 0;
                 PostFfmpegStatus(TrString("status.connection_attempts_exceeded", L"Поток недоступен: превышено число попыток подключения"));
-                for (int i = 0; i < 15 && !g_quit_flag.load(); ++i) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
-                if (g_quit_flag.load() || playbackGeneration != g_playbackGeneration.load()) {
-                    return;
-                }
                 PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
             }
             return;
@@ -4108,7 +4193,10 @@ void PlaybackControlFunction(std::string url) {
         av_dict_free(&options);
 
         PostFfmpegStatus(TrString("status.analyzing_stream", L"Анализ потока и определение формата..."));
-        if (avformat_find_stream_info(formatCtx, nullptr) < 0) {
+        int streamInfoRet = avformat_find_stream_info(formatCtx, nullptr);
+        if (streamInfoRet < 0) {
+            LogToUI("FFmpeg open: avformat_find_stream_info failed: " +
+                av_error_string(streamInfoRet) + " (" + std::to_string(streamInfoRet) + ")");
             avformat_close_input(&formatCtx);
             PostFfmpegStatus(TrString("status.stream_header_read_error", L"Ошибка чтения заголовков потока"));
             PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
@@ -4121,16 +4209,51 @@ void PlaybackControlFunction(std::string url) {
 
         int audioStreamIndex = av_find_best_stream(formatCtx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
         if (audioStreamIndex < 0) {
+            LogToUI("FFmpeg open: av_find_best_stream(audio) failed: " +
+                av_error_string(audioStreamIndex) + " (" + std::to_string(audioStreamIndex) + ")");
             avformat_close_input(&formatCtx);
             PostFfmpegStatus(TrString("status.audio_stream_not_found", L"Не найден аудиопоток"));
             PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
             return;
         }
 
-        const AVCodec* codec = avcodec_find_decoder(formatCtx->streams[audioStreamIndex]->codecpar->codec_id);
+        const AVCodecParameters* audioCodecPar = formatCtx->streams[audioStreamIndex]->codecpar;
+        const AVCodec* codec = avcodec_find_decoder(audioCodecPar->codec_id);
+        if (!codec) {
+            LogToUI("FFmpeg open: avcodec_find_decoder failed for codec_id=" +
+                std::to_string(audioCodecPar->codec_id));
+            avformat_close_input(&formatCtx);
+            PostFfmpegStatus(TrString("status.audio_stream_not_found", L"Не найден аудиопоток"));
+            PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
+            return;
+        }
         codecCtx = avcodec_alloc_context3(codec);
-        avcodec_parameters_to_context(codecCtx, formatCtx->streams[audioStreamIndex]->codecpar);
-        avcodec_open2(codecCtx, codec, nullptr);
+        if (!codecCtx) {
+            LogToUI("FFmpeg open: avcodec_alloc_context3 failed");
+            avformat_close_input(&formatCtx);
+            PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
+            return;
+        }
+
+        int codecParamRet = avcodec_parameters_to_context(codecCtx, formatCtx->streams[audioStreamIndex]->codecpar);
+        if (codecParamRet < 0) {
+            LogToUI("FFmpeg open: avcodec_parameters_to_context failed: " +
+                av_error_string(codecParamRet) + " (" + std::to_string(codecParamRet) + ")");
+            avcodec_free_context(&codecCtx);
+            avformat_close_input(&formatCtx);
+            PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
+            return;
+        }
+
+        int codecOpenRet = avcodec_open2(codecCtx, codec, nullptr);
+        if (codecOpenRet < 0) {
+            LogToUI("FFmpeg open: avcodec_open2 failed: " +
+                av_error_string(codecOpenRet) + " (" + std::to_string(codecOpenRet) + ")");
+            avcodec_free_context(&codecCtx);
+            avformat_close_input(&formatCtx);
+            PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
+            return;
+        }
 
         IAudioClient* audioClient = nullptr;
         IAudioRenderClient* renderClient = nullptr;
@@ -4148,6 +4271,7 @@ void PlaybackControlFunction(std::string url) {
 
         SwrContext* swr = InitSwResample(codecCtx, pwfx);
         if (!swr && !CanBypassSwResample(codecCtx, pwfx)) {
+            LogToUI("FFmpeg open: InitSwResample failed and bypass is not possible");
             PostFfmpegStatus(TrString("status.resampler_init_error", L"Ошибка инициализации ресемплера"));
             CoTaskMemFree(pwfx);
             if (renderClient) renderClient->Release();
@@ -4191,7 +4315,10 @@ void PlaybackControlFunction(std::string url) {
         filter_avol = nullptr;
         filter_asink = nullptr;
 
-        if (init_audio_filter_graph(filterGraph, AV_SAMPLE_FMT_FLTP, pwfx->nSamplesPerSec, channel_mask, current_volume.load(), &filter_abuf, &filter_aeq, &filter_avol, &filter_asink) < 0) {
+        int filterRet = init_audio_filter_graph(filterGraph, AV_SAMPLE_FMT_FLTP, pwfx->nSamplesPerSec, channel_mask, current_volume.load(), &filter_abuf, &filter_aeq, &filter_avol, &filter_asink);
+        if (filterRet < 0) {
+            LogToUI("FFmpeg open: init_audio_filter_graph failed: " +
+                av_error_string(filterRet) + " (" + std::to_string(filterRet) + ")");
             avfilter_graph_free(&filterGraph);
             filterGraph = nullptr;
             filter_abuf = nullptr;
@@ -4264,7 +4391,7 @@ void StartPlaybackThread(const char* url) {
 }
 
 
-void StopPlayback() {
+void StopPlayback(bool resetDisplayedBitrate) {
     std::lock_guard<std::mutex> lock(g_stopPlaybackMutex);
 
     const bool hasPlaybackState =
@@ -4286,7 +4413,7 @@ void StopPlayback() {
     PostFfmpegStatus(TrString("status.stopped", L"Остановлено"));
 
     StopMetadataTimer();
-    ResetMetadataCaches();
+    ResetMetadataCaches(resetDisplayedBitrate);
 
     if (g_playbackThread.joinable()) {
         if (g_playbackThread.get_id() != std::this_thread::get_id()) {

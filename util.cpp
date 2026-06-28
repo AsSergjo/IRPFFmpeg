@@ -227,6 +227,79 @@ std::string av_error_string(int errnum) {
     return std::string(errbuf);
 }
 
+static void LogFfmpegPlaybackError(const char* context, int errnum)
+{
+    LogToUI(std::string("FFmpeg PlaybackLoop: ") + context + " failed: " +
+        av_error_string(errnum) + " (" + std::to_string(errnum) + ")");
+}
+
+static bool ShouldLogLimitedError(int& counter, int limit = 8)
+{
+    if (counter < limit) {
+        ++counter;
+        return true;
+    }
+
+    return false;
+}
+
+static std::mutex g_stableAudioInputProfileMutex;
+static std::string g_stableAudioInputProfileUrl;
+static int g_stableAudioInputSampleRate = 0;
+static AVSampleFormat g_stableAudioInputSampleFormat = AV_SAMPLE_FMT_NONE;
+static AVChannelLayout g_stableAudioInputLayout = {};
+
+static bool CopyStableAudioInputProfileForUrl(const char* url,
+    int& sampleRate,
+    AVSampleFormat& sampleFormat,
+    AVChannelLayout& layout)
+{
+    if (!url || !*url) return false;
+
+    std::lock_guard<std::mutex> lock(g_stableAudioInputProfileMutex);
+    if (g_stableAudioInputProfileUrl != url ||
+        g_stableAudioInputSampleRate <= 0 ||
+        g_stableAudioInputSampleFormat == AV_SAMPLE_FMT_NONE ||
+        g_stableAudioInputLayout.nb_channels <= 0) {
+        return false;
+    }
+
+    AVChannelLayout copiedLayout = {};
+    if (av_channel_layout_copy(&copiedLayout, &g_stableAudioInputLayout) < 0) {
+        return false;
+    }
+
+    sampleRate = g_stableAudioInputSampleRate;
+    sampleFormat = g_stableAudioInputSampleFormat;
+    layout = copiedLayout;
+    return true;
+}
+
+static void StoreStableAudioInputProfileForUrl(const char* url,
+    int sampleRate,
+    AVSampleFormat sampleFormat,
+    const AVChannelLayout& layout)
+{
+    if (!url || !*url ||
+        sampleRate <= 0 ||
+        sampleFormat == AV_SAMPLE_FMT_NONE ||
+        layout.nb_channels <= 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_stableAudioInputProfileMutex);
+    AVChannelLayout copiedLayout = {};
+    if (av_channel_layout_copy(&copiedLayout, &layout) < 0) {
+        return;
+    }
+
+    av_channel_layout_uninit(&g_stableAudioInputLayout);
+    g_stableAudioInputProfileUrl = url;
+    g_stableAudioInputSampleRate = sampleRate;
+    g_stableAudioInputSampleFormat = sampleFormat;
+    g_stableAudioInputLayout = copiedLayout;
+}
+
 // Helper function to write a wstring to a binary stream
 void write_wstring(std::ofstream& ofs, const std::wstring& ws) {
     size_t len = ws.length();
@@ -1109,6 +1182,111 @@ SwrContext* InitSwResample(AVCodecContext* inputCtx, WAVEFORMATEX* wasapiFormat)
     return swr;
 }
 
+static bool GetFrameChannelLayout(const AVFrame* frame, AVChannelLayout* layout)
+{
+    if (!frame || !layout) return false;
+
+    if (av_channel_layout_copy(layout, &frame->ch_layout) >= 0 &&
+        layout->nb_channels > 0) {
+        if (layout->order == AV_CHANNEL_ORDER_UNSPEC) {
+            int channels = layout->nb_channels;
+            av_channel_layout_uninit(layout);
+            av_channel_layout_default(layout, channels);
+        }
+        return layout->nb_channels > 0;
+    }
+
+    *layout = {};
+    av_channel_layout_default(layout, frame->ch_layout.nb_channels);
+    return layout->nb_channels > 0;
+}
+
+static bool GetCodecContextChannelLayout(const AVCodecContext* ctx, AVChannelLayout* layout)
+{
+    if (!ctx || !layout) return false;
+
+    if (av_channel_layout_copy(layout, &ctx->ch_layout) >= 0 &&
+        layout->nb_channels > 0) {
+        if (layout->order == AV_CHANNEL_ORDER_UNSPEC) {
+            int channels = layout->nb_channels;
+            av_channel_layout_uninit(layout);
+            av_channel_layout_default(layout, channels);
+        }
+        return layout->nb_channels > 0;
+    }
+
+    *layout = {};
+    return false;
+}
+
+static bool CanBypassSwResampleFrame(const AVFrame* frame, WAVEFORMATEX* wasapiFormat)
+{
+    if (!frame || !wasapiFormat) return false;
+    if (!IsWaveExtensibleFloat(wasapiFormat)) return false;
+    if (frame->format != AV_SAMPLE_FMT_FLT) return false;
+    if (frame->sample_rate != static_cast<int>(wasapiFormat->nSamplesPerSec)) return false;
+
+    AVChannelLayout in_ch_layout = {};
+    if (!GetFrameChannelLayout(frame, &in_ch_layout)) {
+        return false;
+    }
+
+    AVChannelLayout out_ch_layout = {};
+    bool hasOutputLayout = GetWasapiChannelLayout(wasapiFormat, &out_ch_layout);
+    bool canBypass = hasOutputLayout &&
+        av_channel_layout_compare(&in_ch_layout, &out_ch_layout) == 0;
+
+    av_channel_layout_uninit(&in_ch_layout);
+    av_channel_layout_uninit(&out_ch_layout);
+    return canBypass;
+}
+
+static SwrContext* InitSwResampleForFrame(const AVFrame* frame, WAVEFORMATEX* wasapiFormat)
+{
+    if (!frame || !wasapiFormat) return nullptr;
+    if (CanBypassSwResampleFrame(frame, wasapiFormat)) return nullptr;
+
+    AVChannelLayout in_ch_layout = {};
+    if (!GetFrameChannelLayout(frame, &in_ch_layout)) {
+        return nullptr;
+    }
+
+    AVChannelLayout out_ch_layout = {};
+    if (!GetWasapiChannelLayout(wasapiFormat, &out_ch_layout)) {
+        av_channel_layout_uninit(&in_ch_layout);
+        return nullptr;
+    }
+
+    SwrContext* newSwr = nullptr;
+    int ret = swr_alloc_set_opts2(&newSwr,
+        &out_ch_layout,
+        WasapiSampleFormatToAV(wasapiFormat),
+        wasapiFormat->nSamplesPerSec,
+        &in_ch_layout,
+        static_cast<AVSampleFormat>(frame->format),
+        frame->sample_rate,
+        0,
+        nullptr);
+
+    if (ret >= 0 && newSwr) {
+        if (av_opt_set(newSwr, "resampler", "soxr", 0) >= 0) {
+            av_opt_set_int(newSwr, "precision", 28, 0);
+            av_opt_set_int(newSwr, "cheby", 0, 0);
+        }
+        ret = swr_init(newSwr);
+    }
+
+    av_channel_layout_uninit(&in_ch_layout);
+    av_channel_layout_uninit(&out_ch_layout);
+
+    if (ret < 0) {
+        swr_free(&newSwr);
+        return nullptr;
+    }
+
+    return newSwr;
+}
+
 int init_audio_filter_graph(
     AVFilterGraph* graph,
     enum AVSampleFormat sample_fmt,
@@ -1332,6 +1510,7 @@ static std::string rational_to_string(const AVRational& r) {
 static bool is_nonempty(const char* s) { return s && *s; }
 
 std::string oldssout = "";
+static int g_displayedCodecparKbit = 0;
 void print_and_check_all_metadata(AVFormatContext* fmt, std::string& out) {
     
     if (!fmt) return;
@@ -1418,8 +1597,11 @@ void print_and_check_all_metadata(AVFormatContext* fmt, std::string& out) {
             }
             if (st->codecpar->bit_rate > 0) {
                 int kbit = static_cast<int>((st->codecpar->bit_rate) / 1000); // округление к ближайшему
+                if (g_displayedCodecparKbit <= 0) {
+                    g_displayedCodecparKbit = kbit;
+                }
                 append_dot();
-                header_ss << kbit << "kbps";
+                header_ss << g_displayedCodecparKbit << "kbps";
             }
             if (st->codecpar->sample_rate > 0) {
                 float srate = st->codecpar->sample_rate / 1000.0f;
@@ -1491,9 +1673,12 @@ void StopMetadataTimer() {
 }
 
 std::string oldmeta = "";
-void ResetMetadataCaches() { //очистка глобальных переменных, чтобы при смене трека не было артефактов от старых данных 
+void ResetMetadataCaches(bool resetDisplayedBitrate) { //очистка глобальных переменных, чтобы при смене трека не было артефактов от старых данных
     oldssout.clear();
     oldmeta.clear();
+    if (resetDisplayedBitrate) {
+        g_displayedCodecparKbit = 0;
+    }
 }
 
 // Удалить все вхождения
@@ -1804,17 +1989,6 @@ bool ReinitializeWASAPI(IAudioClient*& audioClient, IAudioRenderClient*& renderC
     return true;
 }
 
-static bool WaitBeforePlaybackReconnect(unsigned long playbackGeneration, int delayMs = 1500)
-{
-    constexpr int stepMs = 100;
-    const int steps = delayMs / stepMs;
-
-    for (int i = 0; i < steps && !g_quit_flag.load(); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(stepMs));
-    }
-
-    return !g_quit_flag.load() && playbackGeneration == g_playbackGeneration.load();
-}
 
 struct MmcssAudioThreadRegistration {
     HANDLE task = nullptr;
@@ -1855,11 +2029,17 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
     AVPacket* packet = av_packet_alloc();
     AVFrame* frame = av_frame_alloc();
 
-    if (!packet || !frame) return;
+    if (!packet || !frame) {
+        LogToUI("FFmpeg PlaybackLoop: failed to allocate AVPacket/AVFrame");
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        return;
+    }
 
     int convertedBufferSamples = static_cast<int>(bufferFrameCount * 2);
     uint8_t* converted_buffer = (uint8_t*)av_malloc(convertedBufferSamples * pwfx->nChannels * sizeof(float));
     if (!converted_buffer) {
+        LogToUI("FFmpeg PlaybackLoop: failed to allocate converted audio buffer");
         av_packet_free(&packet);
         av_frame_free(&frame);
         return;
@@ -1870,10 +2050,306 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
 
     auto playback_start = std::chrono::steady_clock::now();
     auto last_elapsed_update = playback_start;
+    auto lastDecodedAudioOutput = playback_start;
+    bool reconnectAttemptsResetAfterStablePlayback = false;
+    constexpr auto kStablePlaybackBeforeReconnectReset = std::chrono::seconds(10);
+    constexpr auto kCodecErrorStormBeforeReconnect = std::chrono::seconds(3);
+    constexpr int kCodecErrorStormReconnectMinErrors = 10;
 
 
     int consecutive_errors = 0;
     const int MAX_CONSECUTIVE_ERRORS = 20;
+    int logged_read_errors = 0;
+    int logged_codec_errors = 0;
+    int logged_swr_errors = 0;
+    int logged_filter_errors = 0;
+    int currentInputSampleRate = 0;
+    AVSampleFormat currentInputSampleFormat = AV_SAMPLE_FMT_NONE;
+    AVChannelLayout currentInputLayout = {};
+    int sourceInputSampleRate = 0;
+    AVSampleFormat sourceInputSampleFormat = AV_SAMPLE_FMT_NONE;
+    AVChannelLayout sourceInputLayout = {};
+    int pendingInputSampleRate = 0;
+    AVSampleFormat pendingInputSampleFormat = AV_SAMPLE_FMT_NONE;
+    AVChannelLayout pendingInputLayout = {};
+    int pendingInputMatches = 0;
+    bool audioInputProfileGateOpen = false;
+    bool inputProfileMismatchReported = false;
+    bool badServerDataStatusPosted = false;
+    int codecErrorStormCount = 0;
+    bool codecErrorStormActive = false;
+    bool codecErrorStormReported = false;
+    auto codecErrorStormStart = playback_start;
+    constexpr int kStableInputFramesBeforePlayback = 5;
+
+    g_suppressFfmpegDecoderLog.store(false);
+
+    if (reconnect_attempts > 0 &&
+        CopyStableAudioInputProfileForUrl(radioUrl,
+            sourceInputSampleRate,
+            sourceInputSampleFormat,
+            sourceInputLayout)) {
+        LogToUI("FFmpeg PlaybackLoop: restored stable audio frame profile for reconnect");
+    }
+    else if (codecCtx &&
+        codecCtx->sample_rate > 0 &&
+        codecCtx->sample_fmt >= 0 &&
+        codecCtx->sample_fmt < AV_SAMPLE_FMT_NB &&
+        GetCodecContextChannelLayout(codecCtx, &sourceInputLayout)) {
+        sourceInputSampleRate = codecCtx->sample_rate;
+        sourceInputSampleFormat = codecCtx->sample_fmt;
+        LogToUI("FFmpeg PlaybackLoop: fixed audio frame profile from codec context");
+    }
+
+    auto reset_codec_error_storm = [&](std::chrono::steady_clock::time_point now) {
+        lastDecodedAudioOutput = now;
+        codecErrorStormCount = 0;
+        codecErrorStormActive = false;
+        codecErrorStormReported = false;
+        logged_codec_errors = 0;
+        };
+
+    auto post_bad_server_data_status = [&]() {
+        if (!badServerDataStatusPosted) {
+            PostFfmpegStatus(TrString("status.skipping_bad_server_data", L"Пропускаем битые данные от сервера..."));
+            badServerDataStatusPosted = true;
+        }
+        };
+
+    auto note_codec_error = [&](const char* context, int errnum) -> bool {
+        const auto now = std::chrono::steady_clock::now();
+        if (!codecErrorStormActive) {
+            codecErrorStormActive = true;
+            codecErrorStormStart = now;
+            codecErrorStormCount = 0;
+        }
+        ++codecErrorStormCount;
+        audioInputProfileGateOpen = false;
+        g_suppressFfmpegDecoderLog.store(true);
+        post_bad_server_data_status();
+        av_channel_layout_uninit(&pendingInputLayout);
+        pendingInputLayout = {};
+        pendingInputSampleRate = 0;
+        pendingInputSampleFormat = AV_SAMPLE_FMT_NONE;
+        pendingInputMatches = 0;
+
+        if (ShouldLogLimitedError(logged_codec_errors)) {
+            LogFfmpegPlaybackError(context, errnum);
+        }
+
+        const bool reconnectErrorLimit =
+            codecErrorStormCount >= kCodecErrorStormReconnectMinErrors;
+        const bool reconnectStorm =
+            now - codecErrorStormStart >= kCodecErrorStormBeforeReconnect;
+        const bool reconnectNoDecodedAudio =
+            now - lastDecodedAudioOutput >= kCodecErrorStormBeforeReconnect;
+        if (reconnectErrorLimit && reconnectStorm && reconnectNoDecodedAudio && !codecErrorStormReported) {
+            LogToUI("FFmpeg PlaybackLoop: codec error storm without decoded audio, waiting for valid packets");
+            codecErrorStormReported = true;
+        }
+
+        return false;
+        };
+
+    auto are_layouts_equal = [](const AVChannelLayout& a, const AVChannelLayout& b) -> bool {
+        return a.nb_channels > 0 && b.nb_channels > 0 &&
+            av_channel_layout_compare(&a, &b) == 0;
+        };
+
+    auto reset_input_profile_mismatch = [&]() {
+        inputProfileMismatchReported = false;
+        };
+
+    auto reset_pending_input_params = [&]() {
+        av_channel_layout_uninit(&pendingInputLayout);
+        pendingInputLayout = {};
+        pendingInputSampleRate = 0;
+        pendingInputSampleFormat = AV_SAMPLE_FMT_NONE;
+        pendingInputMatches = 0;
+        };
+
+    auto apply_audio_chain_for_frame = [&](const AVFrame* decodedFrame,
+        const AVChannelLayout& frameLayout) -> bool {
+            SwrContext* newSwr = InitSwResampleForFrame(decodedFrame, pwfx);
+            if (!newSwr && !CanBypassSwResampleFrame(decodedFrame, pwfx)) {
+                LogToUI("FFmpeg PlaybackLoop: failed to reinitialize swr for changed audio frame");
+                return false;
+            }
+
+            swr_free(&swr);
+            swr = newSwr;
+
+            av_channel_layout_uninit(&currentInputLayout);
+            if (av_channel_layout_copy(&currentInputLayout, &frameLayout) < 0) {
+                currentInputLayout = {};
+                return false;
+            }
+
+            currentInputSampleRate = decodedFrame->sample_rate;
+            currentInputSampleFormat = static_cast<AVSampleFormat>(decodedFrame->format);
+            if (sourceInputSampleRate <= 0 ||
+                sourceInputSampleFormat == AV_SAMPLE_FMT_NONE ||
+                sourceInputLayout.nb_channels <= 0) {
+                av_channel_layout_uninit(&sourceInputLayout);
+                if (av_channel_layout_copy(&sourceInputLayout, &frameLayout) == 0) {
+                    sourceInputSampleRate = currentInputSampleRate;
+                    sourceInputSampleFormat = currentInputSampleFormat;
+                    StoreStableAudioInputProfileForUrl(radioUrl,
+                        sourceInputSampleRate,
+                        sourceInputSampleFormat,
+                        sourceInputLayout);
+                }
+                else {
+                    sourceInputLayout = {};
+                }
+            }
+            if (currentInputSampleRate > 0 &&
+                currentInputSampleFormat != AV_SAMPLE_FMT_NONE &&
+                currentInputLayout.nb_channels > 0) {
+                StoreStableAudioInputProfileForUrl(radioUrl,
+                    currentInputSampleRate,
+                    currentInputSampleFormat,
+                    currentInputLayout);
+            }
+            logged_swr_errors = 0;
+            ResetRealtimeAudioDspState();
+            audioInputProfileGateOpen = true;
+            g_suppressFfmpegDecoderLog.store(false);
+            badServerDataStatusPosted = false;
+            reset_input_profile_mismatch();
+            reset_pending_input_params();
+
+            LogToUI("FFmpeg PlaybackLoop: stable audio frame profile accepted, swr configured");
+            return true;
+        };
+
+    auto count_pending_input_profile = [&](const AVFrame* decodedFrame,
+        AVSampleFormat frameFormat,
+        const AVChannelLayout& frameLayout) -> bool {
+            const bool sameAsPending =
+                pendingInputSampleRate == decodedFrame->sample_rate &&
+                pendingInputSampleFormat == frameFormat &&
+                are_layouts_equal(pendingInputLayout, frameLayout);
+
+            if (!sameAsPending) {
+                reset_pending_input_params();
+                if (av_channel_layout_copy(&pendingInputLayout, &frameLayout) < 0) {
+                    return false;
+                }
+                pendingInputSampleRate = decodedFrame->sample_rate;
+                pendingInputSampleFormat = frameFormat;
+                pendingInputMatches = 1;
+                return false;
+            }
+
+            ++pendingInputMatches;
+            return pendingInputMatches >= kStableInputFramesBeforePlayback;
+        };
+
+    auto is_audio_frame_profile_allowed = [&](const AVFrame* decodedFrame) -> bool {
+        if (!decodedFrame ||
+            decodedFrame->sample_rate <= 0 ||
+            decodedFrame->format < 0 ||
+            decodedFrame->format >= AV_SAMPLE_FMT_NB) {
+            audioInputProfileGateOpen = false;
+            g_suppressFfmpegDecoderLog.store(true);
+            post_bad_server_data_status();
+            reset_pending_input_params();
+            return false;
+        }
+
+        AVChannelLayout frameLayout = {};
+        if (!GetFrameChannelLayout(decodedFrame, &frameLayout)) {
+            audioInputProfileGateOpen = false;
+            g_suppressFfmpegDecoderLog.store(true);
+            post_bad_server_data_status();
+            reset_pending_input_params();
+            return false;
+        }
+        if (frameLayout.nb_channels <= 0 || frameLayout.nb_channels > 8) {
+            audioInputProfileGateOpen = false;
+            g_suppressFfmpegDecoderLog.store(true);
+            post_bad_server_data_status();
+            reset_pending_input_params();
+            av_channel_layout_uninit(&frameLayout);
+            return false;
+        }
+
+        const AVSampleFormat frameFormat = static_cast<AVSampleFormat>(decodedFrame->format);
+        const bool hasCurrentInput =
+            currentInputSampleRate > 0 &&
+            currentInputSampleFormat != AV_SAMPLE_FMT_NONE &&
+            currentInputLayout.nb_channels > 0;
+        const bool sameAsCurrent =
+            hasCurrentInput &&
+            currentInputSampleRate == decodedFrame->sample_rate &&
+            currentInputSampleFormat == frameFormat &&
+            are_layouts_equal(currentInputLayout, frameLayout);
+        const bool hasSourceInput =
+            sourceInputSampleRate > 0 &&
+            sourceInputSampleFormat != AV_SAMPLE_FMT_NONE &&
+            sourceInputLayout.nb_channels > 0;
+        const bool sameAsSource =
+            hasSourceInput &&
+            sourceInputSampleRate == decodedFrame->sample_rate &&
+            sourceInputSampleFormat == frameFormat &&
+            are_layouts_equal(sourceInputLayout, frameLayout);
+
+        if (audioInputProfileGateOpen && sameAsCurrent) {
+            g_suppressFfmpegDecoderLog.store(false);
+            badServerDataStatusPosted = false;
+            reset_input_profile_mismatch();
+            reset_pending_input_params();
+            av_channel_layout_uninit(&frameLayout);
+            return true;
+        }
+
+        if (hasCurrentInput && !sameAsCurrent) {
+            audioInputProfileGateOpen = false;
+            g_suppressFfmpegDecoderLog.store(true);
+            post_bad_server_data_status();
+            reset_pending_input_params();
+
+            if (!inputProfileMismatchReported) {
+                LogToUI("FFmpeg PlaybackLoop: decoded frame profile differs from fixed stream profile, waiting for fixed profile");
+                inputProfileMismatchReported = true;
+            }
+
+            av_channel_layout_uninit(&frameLayout);
+            return false;
+        }
+
+        if (!hasCurrentInput) {
+            if (hasSourceInput && !sameAsSource) {
+                g_suppressFfmpegDecoderLog.store(true);
+                post_bad_server_data_status();
+                reset_pending_input_params();
+                if (!inputProfileMismatchReported) {
+                    LogToUI("FFmpeg PlaybackLoop: decoded frame profile differs from fixed stream profile, waiting for fixed profile");
+                    inputProfileMismatchReported = true;
+                }
+                av_channel_layout_uninit(&frameLayout);
+                return false;
+            }
+
+            bool stable = count_pending_input_profile(decodedFrame, frameFormat, frameLayout);
+            bool ok = stable && apply_audio_chain_for_frame(decodedFrame, frameLayout);
+            av_channel_layout_uninit(&frameLayout);
+            return ok;
+        }
+
+        bool stable = count_pending_input_profile(decodedFrame, frameFormat, frameLayout);
+        bool ok = stable && sameAsCurrent;
+        if (ok) {
+            audioInputProfileGateOpen = true;
+            g_suppressFfmpegDecoderLog.store(false);
+            badServerDataStatusPosted = false;
+            reset_input_profile_mismatch();
+            reset_pending_input_params();
+        }
+        av_channel_layout_uninit(&frameLayout);
+        return ok;
+        };
 
     HRESULT hr0 = 0;
 
@@ -1899,10 +2375,11 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                 break;
             }
             if (read_result == AVERROR_EXIT) {
+                LogFfmpegPlaybackError("av_read_frame returned AVERROR_EXIT", read_result);
                 break;
             }
             if (read_result == AVERROR_EOF) {
-                //LogToUI("PlaybackLoop: End of stream.");
+                LogFfmpegPlaybackError("av_read_frame returned EOF", read_result);
             }
             else if (read_result == AVERROR(EAGAIN)) {
                 // Non‑blocking read would block; sleep a bit and retry
@@ -1912,27 +2389,26 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
             }
             else {
                 consecutive_errors++;
+                if (ShouldLogLimitedError(logged_read_errors) ||
+                    consecutive_errors == MAX_CONSECUTIVE_ERRORS + 1) {
+                    LogFfmpegPlaybackError("av_read_frame", read_result);
+                }
                 if (consecutive_errors > MAX_CONSECUTIVE_ERRORS) {
 
                     if (reconnect_attempts < MAX_RECONNECT_ATTEMPTS) {
                         // Wait before retrying??
                         PostFfmpegStatus(TrString("status.stream_read_error_reconnect", L"Ошибка чтения потока. Переподключение..."));
                         const int nextAttempt = ++reconnect_attempts;
-                        if (WaitBeforePlaybackReconnect(playbackGeneration)) {
-                            PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, nextAttempt);
-                        }
+                        PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, nextAttempt);
                         break;
 
                     }
                     else {
                         //слишком много ошибок
                         PostFfmpegStatus(TrString("status.stream_reconnect_attempts_exceeded", L"Ошибка потока: превышено число попыток переподключения"));
-                        if (WaitBeforePlaybackReconnect(playbackGeneration)) {
-                            running.store(false);
-                            g_quit_flag.store(true);
-                            PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
-                        }
-                        
+                        running.store(false);
+                        g_quit_flag.store(true);
+                        PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 0);
                         break;
                     }
                 }
@@ -1945,7 +2421,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
 
         // Reset error counter on successful read
         consecutive_errors = 0;
-        reconnect_attempts = 0;
+        logged_read_errors = 0;
 
         // --- Elapsed time update (once per second) ---
         auto now = std::chrono::steady_clock::now();
@@ -1962,10 +2438,22 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
 
         // Defensive check for packet not being null
         if (packet && packet->stream_index == audioStreamIndex) {
-            if (avcodec_send_packet(codecCtx, packet) == 0) {
-                while (avcodec_receive_frame(codecCtx, frame) == 0) {
+            int sendRet = avcodec_send_packet(codecCtx, packet);
+
+            if (sendRet == 0) {
+                int receiveRet = 0;
+                while ((receiveRet = avcodec_receive_frame(codecCtx, frame)) == 0) {
+
                     // Defensive check for frame data
                     if (!frame || !frame->data[0]) {
+                        audioInputProfileGateOpen = false;
+                        reset_pending_input_params();
+                        av_frame_unref(frame);
+                        continue;
+                    }
+
+                    if (!is_audio_frame_profile_allowed(frame)) {
+                        av_frame_unref(frame);
                         continue;
                     }
 
@@ -2033,6 +2521,9 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                                         raw_audio_data.assign((float*)temp_buffer.data(),
                                             (float*)temp_buffer.data() + total_samples);
                                     }
+                                    else if (converted < 0 && ShouldLogLimitedError(logged_swr_errors)) {
+                                        LogFfmpegPlaybackError("record swr_convert", converted);
+                                    }
                                 }
 
                                 swr_free(&record_swr);
@@ -2048,11 +2539,36 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                     }
 
                     int converted_count = 0;
+                    int requiredConvertedSamples = frame->nb_samples;
+                    if (swr) {
+                        int64_t delayed = swr_get_delay(swr, frame->sample_rate);
+                        requiredConvertedSamples = static_cast<int>(av_rescale_rnd(
+                            delayed + frame->nb_samples,
+                            pwfx->nSamplesPerSec,
+                            frame->sample_rate,
+                            AV_ROUND_UP));
+                    }
+
+                    if (requiredConvertedSamples > convertedBufferSamples) {
+                        uint8_t* resized = (uint8_t*)av_realloc(
+                            converted_buffer,
+                            requiredConvertedSamples * pwfx->nChannels * sizeof(float));
+                        if (!resized) {
+                            running.store(false);
+                            break;
+                        }
+                        converted_buffer = resized;
+                        convertedBufferSamples = requiredConvertedSamples;
+                    }
+
                     if (swr) {
                         uint8_t* out_data[1] = { converted_buffer };
                         converted_count = swr_convert(swr,
                             out_data, convertedBufferSamples,
                             (const uint8_t**)frame->data, frame->nb_samples);
+                        if (converted_count < 0 && ShouldLogLimitedError(logged_swr_errors)) {
+                            LogFfmpegPlaybackError("playback swr_convert", converted_count);
+                        }
                     }
                     else if (frame->format == AV_SAMPLE_FMT_FLT && frame->data[0]) {
                         if (frame->nb_samples > convertedBufferSamples) {
@@ -2078,6 +2594,14 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                     }
 
                     if (converted_count > 0) {
+                        const auto decodedNow = std::chrono::steady_clock::now();
+                        reset_codec_error_storm(decodedNow);
+                        if (!reconnectAttemptsResetAfterStablePlayback &&
+                            decodedNow - playback_start >= kStablePlaybackBeforeReconnectReset) {
+                            reconnect_attempts = 0;
+                            reconnectAttemptsResetAfterStablePlayback = true;
+                            LogToUI("FFmpeg PlaybackLoop: stable decoded playback, reconnect counter reset");
+                        }
                         float* audio_data = (float*)converted_buffer;
                         int channels = pwfx->nChannels;
                         int total_samples = converted_count * channels;
@@ -2131,8 +2655,9 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                                     // Feed frame to filter graph
                                     int ret = av_buffersrc_add_frame(filter_abuf, frame_for_filter);
                                     if (ret < 0) {
-                                        
-                                        //LogToUI("Continue without filtering on error.");
+                                        if (ShouldLogLimitedError(logged_filter_errors)) {
+                                            LogFfmpegPlaybackError("av_buffersrc_add_frame", ret);
+                                        }
                                     }
                                     else {
                                         // Get processed frame
@@ -2152,6 +2677,10 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                                             av_frame_free(&filtered_frame);
                                         }
                                         else if (ret < 0) {
+                                            if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF &&
+                                                ShouldLogLimitedError(logged_filter_errors)) {
+                                                LogFfmpegPlaybackError("av_buffersink_get_frame", ret);
+                                            }
                                             av_frame_free(&filtered_frame);
                                         }
                                         else {
@@ -2221,7 +2750,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                                     frame = av_frame_alloc();
 
                                     if (!converted_buffer || !packet || !frame) {
-                                       //LogToUI("PlaybackLoop: Failed to reallocate buffers after device change.");
+                                        LogToUI("PlaybackLoop: failed to reallocate buffers after device change");
                                         running.store(false);
                                         break;
                                     }
@@ -2230,13 +2759,13 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                                     
                                 }
                                 else {
-                                    //LogToUI("PlaybackLoop: Failed to reinitialize audio system.");
+                                    LogToUI("PlaybackLoop: failed to reinitialize audio system after device change");
                                     running.store(false);
                                     break;
                                 }
                             }
                             else if (FAILED(hr0)) {
-                                //LogToUI("PlaybackLoop: GetCurrentPadding failed.");
+                                LogToUI("PlaybackLoop: GetCurrentPadding failed, HRESULT=" + std::to_string(hr0));
                                 running.store(false);
                                 break;
                             }
@@ -2270,7 +2799,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
 
                             }
                             else {
-                                //LogToUI("PlaybackLoop: renderClient GetBuffer error.");
+                                LogToUI("PlaybackLoop: renderClient GetBuffer failed, HRESULT=" + std::to_string(hr));
                                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                             }
                         }
@@ -2278,6 +2807,12 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                     }
                     
                 }
+                if (receiveRet != AVERROR(EAGAIN) && receiveRet != AVERROR_EOF) {
+                    note_codec_error("avcodec_receive_frame", receiveRet);
+                }
+            }
+            else if (sendRet != AVERROR(EAGAIN) && sendRet != AVERROR_EOF) {
+                note_codec_error("avcodec_send_packet", sendRet);
             }
             
         }
@@ -2291,6 +2826,10 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
     av_free(converted_buffer);
     av_packet_free(&packet);
     av_frame_free(&frame);
+    av_channel_layout_uninit(&currentInputLayout);
+    av_channel_layout_uninit(&sourceInputLayout);
+    av_channel_layout_uninit(&pendingInputLayout);
+    g_suppressFfmpegDecoderLog.store(false);
 
     if (pwfx)
     {

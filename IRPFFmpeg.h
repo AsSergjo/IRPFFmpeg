@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "resource.h"
 #include "util.h"
 
@@ -50,6 +50,8 @@ constexpr int METADATA_UPDATE_INTERVAL_MS = 1000; // Metadata check interval 1 s
 // -------------------------------
 extern std::atomic<bool> running;
 extern std::atomic_bool g_quit_flag;
+extern std::atomic_bool g_suppressFfmpegDecoderLog;
+extern std::atomic_bool g_enableDebugLogFile;//включить логирование в файл debug.log
 extern std::string current_track;
 extern std::string current_metadata;
 extern std::mutex metadata_mutex;
@@ -151,6 +153,6 @@ void CleanupShowCQT();
 void UpdateFilterSettings();
 
 void PostFfmpegStatus(const std::wstring& status);
-void StopPlayback();
+void StopPlayback(bool resetDisplayedBitrate = true);
 
 #endif // MAIN_H

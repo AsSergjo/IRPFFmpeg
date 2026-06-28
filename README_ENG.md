@@ -16,6 +16,7 @@ The project is a lightweight C++17 Win32 application: no Electron, no browser sh
 - work with M3U playlists;
 - add, delete and switch stations from the interface;
 - show ICY/stream metadata and technical stream status;
+- handle problematic streams with corrupted or unstable audio more robustly;
 - search, download and cache cover art;
 - record the current broadcast to `Rec`;
 - export recordings to MP3 320 kbit/sec or FLAC;
@@ -92,6 +93,8 @@ Rec/            - recorded tracks
 cover_cache/    - cover cache
 debug_log.txt   - diagnostic log, if logging is enabled
 ```
+
+When a stream sends invalid audio data, the app skips those frames, temporarily shows `Skipping corrupted data from server...` and keeps waiting for a stable audio profile without noisy FFmpeg messages in the status line.
 
 ## Building From Source
 

@@ -20,6 +20,7 @@ std::string url_encode(const std::string& value);
 std::wstring url_decode(const std::wstring& str);
 HRESULT download_file(const std::wstring& url, const std::wstring& file_path, int timeout);
 std::wstring ResolveStationNameFromUrl(const std::wstring& url);
+std::string av_error_string(int errnum);
 
 #endif // UTIL_H
 
@@ -44,4 +45,4 @@ bool reloadCoverTexture();
 void LogToUI(const std::string& message);
 // Функция для очистки ресурсов SDL
 void cleanupSDL();
-void ResetMetadataCaches();
+void ResetMetadataCaches(bool resetDisplayedBitrate = true);
