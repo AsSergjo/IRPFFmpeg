@@ -14,15 +14,16 @@ The project is a lightweight C++17 Win32 application: no Electron, no browser sh
 
 - play internet radio streams by URL;
 - work with M3U playlists;
-- add, delete and switch stations from the interface;
+- add, delete, rename, save and switch stations from the interface;
 - show ICY/stream metadata and technical stream status;
+- automatically update the displayed station name from ICY metadata;
 - handle problematic streams with corrupted or unstable audio more robustly;
 - search, download and cache cover art;
 - record the current broadcast to `Rec`;
 - export recordings to MP3 320 kbit/sec or FLAC;
 - write metadata and cover art to recordings when available;
 - adjust volume, bass and treble;
-- Stereo Width, Exciter, DeepBass, Dynamic Auto Volume, GainRider and final limiter;
+- Stereo Width, Exciter, DeepBass, Dynamic Auto Volume, Station LUFS Normalizer, GainRider and final limiter;
 - minimize to the system tray;
 - show a cover/title popup on track change while the app is in the tray;
 - choose the interface language: Russian or English;
@@ -40,9 +41,9 @@ It is better not to run `IRPFFmpeg.exe` directly: the main application needs lib
 
 Recommended download flow from GitHub Releases:
 
-1. Download `IRPFFmpeg-v1.0.1-support-win-x64.zip`.
+1. Download `IRPFFmpeg-v1.0.1-support-win-x64.zip` from the `v1.0.1` release if you do not already have a working folder with DLLs and support files.
 2. Extract it to a separate folder.
-3. Download the current `IRPFFmpeg.exe` from the same release and place it next to `Start_IRPFFmpeg.exe`.
+3. Download the current `IRPFFmpeg.exe` from the latest release, for example `v1.0.2`, and place it next to `Start_IRPFFmpeg.exe`.
 4. Run `Start_IRPFFmpeg.exe`.
 
 The support archive contains libraries, the launcher, playlist, settings and language files. For small fixes, it is usually enough to replace only `IRPFFmpeg.exe`.

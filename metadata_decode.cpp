@@ -232,18 +232,6 @@ int ScoreDecodedText(const std::wstring& decoded, UINT codePage)
     return score;
 }
 
-void ReplaceAll(std::wstring& text, const std::wstring& from, const std::wstring& to)
-{
-    if (from.empty())
-        return;
-
-    size_t pos = 0;
-    while ((pos = text.find(from, pos)) != std::wstring::npos) {
-        text.replace(pos, from.size(), to);
-        pos += to.size();
-    }
-}
-
 bool TryParseHtmlNumericEntity(const std::wstring& text, size_t ampPos, size_t& endPos, wchar_t& outCh)
 {
     if (ampPos + 3 >= text.size() || text[ampPos] != L'&' || text[ampPos + 1] != L'#')
@@ -313,13 +301,6 @@ void DecodeHtmlNumericEntities(std::wstring& text)
     }
 
     text.swap(result);
-}
-
-std::wstring PostprocessDecodedMetadata(std::wstring text)
-{
-    DecodeHtmlNumericEntities(text);
-
-    return text;
 }
 
 std::wstring TryRepairUtf8Mojibake(const std::wstring& decoded)
@@ -402,24 +383,32 @@ std::wstring DecodeMetadataToWideString(const std::string& str)
     std::wstring decoded = DecodeTextWithCodepage(str, CP_UTF8, MB_ERR_INVALID_CHARS);
     if (!decoded.empty()) {
         std::wstring repaired = TryRepairUtf8Mojibake(decoded);
-        if (!repaired.empty())
-            return PostprocessDecodedMetadata(repaired);
+        if (!repaired.empty()) {
+            DecodeHtmlNumericEntities(repaired);
+            return repaired;
+        }
 
         repaired = TryRepairCp1251Mojibake(decoded);
-        if (!repaired.empty())
-            return PostprocessDecodedMetadata(repaired);
+        if (!repaired.empty()) {
+            DecodeHtmlNumericEntities(repaired);
+            return repaired;
+        }
 
-        return PostprocessDecodedMetadata(decoded);
+        DecodeHtmlNumericEntities(decoded);
+        return decoded;
     }
 
     decoded = DecodeSingleByteMetadata(str);
-    if (!decoded.empty())
-        return PostprocessDecodedMetadata(decoded);
+    if (!decoded.empty()) {
+        DecodeHtmlNumericEntities(decoded);
+        return decoded;
+    }
 
     std::wstring fallback;
     fallback.reserve(str.size());
     for (char ch : str)
         fallback.push_back(static_cast<wchar_t>(static_cast<unsigned char>(ch)));
 
-    return PostprocessDecodedMetadata(fallback);
+    DecodeHtmlNumericEntities(fallback);
+    return fallback;
 }

@@ -9,6 +9,8 @@ struct FinalLimiterActivity {
 };
 
 void ResetRealtimeAudioDspState();
+void AnalyzeLufsGainNormalizer(const float* buffer, size_t frames, int channels, int sample_rate);
+void ApplyLufsGainNormalizer(float* buffer, size_t frames, int channels, int sample_rate);
 void RemoveDCOffset(float* buffer, size_t frames, int channels, int sample_rate);
 void ProcessDynamicAutoVolume(float* buffer, size_t frames, int channels, int sample_rate);
 void ProcessDeepBass(float* buffer, size_t frames, int channels, int sample_rate, float amount);

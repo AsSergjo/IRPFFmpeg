@@ -47,10 +47,13 @@
 #define IDC_GROUP_RECORDING             1031
 #define IDC_GROUP_EFFECTS               1032
 #define IDC_GROUP_PROGRAM               1033
+#define IDC_CHECK_LUFS_GAIN_NORMALIZER  1034
 #define ID_LISTBOX_COPY                 32771
 #define ID_LIST_URL_DELETE_STATION      32772
 #define ID_LIST_URL_ADD_STATION         32773
 #define IDM_TRAY_RESTORE               32774
+#define ID_LIST_URL_SAVE_STATION        32775
+#define ID_LIST_URL_EDIT_STATION        32776
 
 // Next default values for new objects
 // 
@@ -58,8 +61,8 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        132
-#define _APS_NEXT_COMMAND_VALUE         32775
-#define _APS_NEXT_CONTROL_VALUE         1034
+#define _APS_NEXT_COMMAND_VALUE         32777
+#define _APS_NEXT_CONTROL_VALUE         1035
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

@@ -693,16 +693,6 @@ static bool IsRegularNonEmptyFile(const std::filesystem::path& path)
         std::filesystem::file_size(path, ec) > 0 && !ec;
 }
 
-static bool CanDecodeCoverWithSdlImage(const std::filesystem::path& path)
-{
-    SDL_Surface* surface = IMG_Load(wstring_to_utf8(path.wstring()).c_str());
-    if (!surface)
-        return false;
-
-    SDL_FreeSurface(surface);
-    return true;
-}
-
 static bool IsCoverCacheServiceFile(const std::filesystem::path& path)
 {
     const std::wstring filename = path.filename().wstring();
@@ -723,28 +713,6 @@ static std::mutex g_coverCacheIndexMutex;
 static bool g_coverCacheIndexLoaded = false;
 static bool g_coverCacheIndexDirty = false;
 static bool g_clearCoverCacheOnExit = false;
-
-static long long CoverCacheNow()
-{
-    return static_cast<long long>(std::time(nullptr));
-}
-
-static std::filesystem::path MakeCoverCacheIndexPath()
-{
-    return std::filesystem::path(COVER_CACHE_DIR) / L"cache.dat";
-}
-
-static std::filesystem::path MakeCoverCacheIndexTempPath()
-{
-    return std::filesystem::path(COVER_CACHE_DIR) / L"cache.dat.tmp";
-}
-
-static uintmax_t GetFileSizeOrZero(const std::filesystem::path& path)
-{
-    std::error_code ec;
-    const uintmax_t size = std::filesystem::file_size(path, ec);
-    return ec ? 0 : size;
-}
 
 static long long FileTimeToUnixTime(const FILETIME& fileTime)
 {
@@ -775,7 +743,7 @@ static bool TryGetFileCreationTime(const std::filesystem::path& path, long long&
 static long long GetFileCreationTimeOrNow(const std::filesystem::path& path)
 {
     long long created = 0;
-    return TryGetFileCreationTime(path, created) ? created : CoverCacheNow();
+    return TryGetFileCreationTime(path, created) ? created : static_cast<long long>(std::time(nullptr));
 }
 
 static void RebuildCoverCacheIndexFromDiskLocked()
@@ -818,7 +786,7 @@ static void LoadCoverCacheIndexLocked()
     if (!EnsureCoverCacheDirectory())
         return;
 
-    std::ifstream file(MakeCoverCacheIndexPath(), std::ios::binary);
+    std::ifstream file(std::filesystem::path(COVER_CACHE_DIR) / L"cache.dat", std::ios::binary);
     if (!file.is_open()) {
         RebuildCoverCacheIndexFromDiskLocked();
         return;
@@ -838,7 +806,9 @@ static void LoadCoverCacheIndexLocked()
         if (IsCoverCacheServiceFile(cachePath) || !IsRegularNonEmptyFile(cachePath))
             continue;
 
-        const uintmax_t actualSize = GetFileSizeOrZero(cachePath);
+        std::error_code sizeEc;
+        const uintmax_t fileSize = std::filesystem::file_size(cachePath, sizeEc);
+        const uintmax_t actualSize = sizeEc ? 0 : fileSize;
         if (actualSize == 0)
             continue;
 
@@ -984,8 +954,8 @@ static void ClearCoverCacheFilesLocked()
 
 static void WriteCoverCacheIndexLocked()
 {
-    const std::filesystem::path tempPath = MakeCoverCacheIndexTempPath();
-    const std::filesystem::path indexPath = MakeCoverCacheIndexPath();
+    const std::filesystem::path tempPath = std::filesystem::path(COVER_CACHE_DIR) / L"cache.dat.tmp";
+    const std::filesystem::path indexPath = std::filesystem::path(COVER_CACHE_DIR) / L"cache.dat";
 
     std::ofstream file(tempPath, std::ios::binary | std::ios::trunc);
     if (!file.is_open())
@@ -1042,15 +1012,6 @@ void ClearCoverCacheNow()
     WriteCoverCacheIndexLocked();
 }
 
-static void SaveCoverCacheIndexWithoutDiskSync()
-{
-    std::lock_guard<std::mutex> lock(g_coverCacheIndexMutex);
-    if (!g_coverCacheIndexLoaded)
-        return;
-
-    WriteCoverCacheIndexLocked();
-}
-
 static void UpdateCoverCacheRecord(const std::filesystem::path& cachePath, uintmax_t size)
 {
     if (size == 0 || IsCoverCacheServiceFile(cachePath))
@@ -1078,13 +1039,6 @@ static void UpdateCoverCacheRecord(const std::filesystem::path& cachePath, uintm
         record.size = size;
         g_coverCacheIndexDirty = true;
     }
-}
-
-static void EnforceCoverCacheLimit()
-{
-    std::lock_guard<std::mutex> lock(g_coverCacheIndexMutex);
-    LoadCoverCacheIndexLocked();
-    EnforceCoverCacheLimitLocked();
 }
 
 static bool CopyFileOverwriteLocked(const std::filesystem::path& source,
@@ -1126,9 +1080,22 @@ static void SaveDownloadedCoverToCache(const std::filesystem::path& downloadedPa
     if (ec)
         return;
 
-    UpdateCoverCacheRecord(cachePath, GetFileSizeOrZero(cachePath));
-    EnforceCoverCacheLimit();
-    SaveCoverCacheIndexWithoutDiskSync();
+    std::error_code sizeEc;
+    const uintmax_t fileSize = std::filesystem::file_size(cachePath, sizeEc);
+    UpdateCoverCacheRecord(cachePath, sizeEc ? 0 : fileSize);
+
+    {
+        std::lock_guard<std::mutex> lock(g_coverCacheIndexMutex);
+        LoadCoverCacheIndexLocked();
+        EnforceCoverCacheLimitLocked();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_coverCacheIndexMutex);
+        if (g_coverCacheIndexLoaded) {
+            WriteCoverCacheIndexLocked();
+        }
+    }
 }
 
 static bool DownloadCoverToCurrentAndCache(const std::wstring& imageUrl,
@@ -1152,10 +1119,12 @@ static bool DownloadCoverToCurrentAndCache(const std::wstring& imageUrl,
         return false;
     }
 
-    if (!CanDecodeCoverWithSdlImage(tempPath)) {
+    SDL_Surface* surface = IMG_Load(wstring_to_utf8(tempPath.wstring()).c_str());
+    if (!surface) {
         std::filesystem::remove(tempPath, ec);
         return false;
     }
+    SDL_FreeSurface(surface);
 
     if (!CopyFileOverwriteLocked(tempPath, CURRENT_COVER_FILE)) {
         std::filesystem::remove(tempPath, ec);

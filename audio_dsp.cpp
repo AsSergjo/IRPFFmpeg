@@ -3,6 +3,8 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <string>
 
 namespace {
@@ -39,6 +41,194 @@ struct DCBlocker {
 };
 
 DCBlocker g_dc_blocker[DC_BLOCKER_MAX_CHANNELS];
+
+constexpr double PI = 3.14159265358979323846;
+
+struct Biquad {
+    double b0 = 1.0;
+    double b1 = 0.0;
+    double b2 = 0.0;
+    double a1 = 0.0;
+    double a2 = 0.0;
+    double z1 = 0.0;
+    double z2 = 0.0;
+
+    double Process(double x)
+    {
+        const double y = b0 * x + z1;
+        z1 = b1 * x - a1 * y + z2;
+        z2 = b2 * x - a2 * y;
+        return y;
+    }
+};
+
+constexpr int LUFS_NORMALIZER_MAX_CHANNELS = 8;
+constexpr size_t LUFS_NORMALIZER_MAX_BLOCKS = 150;
+constexpr float g_referenceLufs = -8.10f;
+
+struct LufsBlock {
+    double energy = 0.0;
+    uint64_t frames = 0;
+};
+
+struct LufsGainNormalizerState {
+    int sample_rate = 0;
+    int channels = 0;
+    uint64_t block_frames = 0;
+    uint64_t frames_in_block = 0;
+    uint64_t frames_seen = 0;
+    double block_energy_sum = 0.0;
+    double rolling_energy_sum = 0.0;
+    uint64_t rolling_frames = 0;
+    size_t block_pos = 0;
+    size_t block_count = 0;
+    float current_lufs = -std::numeric_limits<float>::infinity();
+    float desired_gain_db = 0.0f;
+    float smoothed_gain_db = 0.0f;
+    Biquad prefilter[LUFS_NORMALIZER_MAX_CHANNELS];
+    Biquad rlb_highpass[LUFS_NORMALIZER_MAX_CHANNELS];
+    LufsBlock blocks[LUFS_NORMALIZER_MAX_BLOCKS];
+};
+
+LufsGainNormalizerState g_lufs_normalizer;
+std::chrono::steady_clock::time_point g_lufsNormalizerLastPost =
+    std::chrono::steady_clock::now() - std::chrono::milliseconds(500);
+
+void SetHighPass(Biquad& biquad, double sample_rate, double freq_hz, double q)
+{
+    const double w0 = 2.0 * PI * freq_hz / sample_rate;
+    const double cos_w0 = std::cos(w0);
+    const double sin_w0 = std::sin(w0);
+    const double alpha = sin_w0 / (2.0 * q);
+    const double a0 = 1.0 + alpha;
+
+    biquad.b0 = ((1.0 + cos_w0) * 0.5) / a0;
+    biquad.b1 = (-(1.0 + cos_w0)) / a0;
+    biquad.b2 = ((1.0 + cos_w0) * 0.5) / a0;
+    biquad.a1 = (-2.0 * cos_w0) / a0;
+    biquad.a2 = (1.0 - alpha) / a0;
+    biquad.z1 = 0.0;
+    biquad.z2 = 0.0;
+}
+
+void SetHighShelf(Biquad& biquad, double sample_rate, double freq_hz, double gain_db, double q)
+{
+    const double A = std::pow(10.0, gain_db / 40.0);
+    const double w0 = 2.0 * PI * freq_hz / sample_rate;
+    const double cos_w0 = std::cos(w0);
+    const double sin_w0 = std::sin(w0);
+    const double alpha = sin_w0 / (2.0 * q);
+    const double sqrt_A = std::sqrt(A);
+
+    const double b0 = A * ((A + 1.0) + (A - 1.0) * cos_w0 + 2.0 * sqrt_A * alpha);
+    const double b1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * cos_w0);
+    const double b2 = A * ((A + 1.0) + (A - 1.0) * cos_w0 - 2.0 * sqrt_A * alpha);
+    const double a0 = (A + 1.0) - (A - 1.0) * cos_w0 + 2.0 * sqrt_A * alpha;
+    const double a1 = 2.0 * ((A - 1.0) - (A + 1.0) * cos_w0);
+    const double a2 = (A + 1.0) - (A - 1.0) * cos_w0 - 2.0 * sqrt_A * alpha;
+
+    biquad.b0 = b0 / a0;
+    biquad.b1 = b1 / a0;
+    biquad.b2 = b2 / a0;
+    biquad.a1 = a1 / a0;
+    biquad.a2 = a2 / a0;
+    biquad.z1 = 0.0;
+    biquad.z2 = 0.0;
+}
+
+void ResetLufsGainNormalizerState()
+{
+    g_lufs_normalizer = LufsGainNormalizerState();
+    g_lufsNormalizerLastPost =
+        std::chrono::steady_clock::now() - std::chrono::milliseconds(500);
+}
+
+void InitLufsGainNormalizerState(int channels, int sample_rate)
+{
+    g_lufs_normalizer = LufsGainNormalizerState();
+    g_lufs_normalizer.sample_rate = sample_rate;
+    g_lufs_normalizer.channels = channels;
+    g_lufs_normalizer.block_frames = static_cast<uint64_t>(sample_rate) * 400ULL / 1000ULL;
+    if (g_lufs_normalizer.block_frames == 0) {
+        g_lufs_normalizer.block_frames = 1;
+    }
+
+    const int active_ch = (channels <= LUFS_NORMALIZER_MAX_CHANNELS)
+        ? channels
+        : LUFS_NORMALIZER_MAX_CHANNELS;
+
+    for (int ch = 0; ch < active_ch; ++ch) {
+        SetHighShelf(g_lufs_normalizer.prefilter[ch], sample_rate, 1681.974450955533, 4.0, 0.7071752369554196);
+        SetHighPass(g_lufs_normalizer.rlb_highpass[ch], sample_rate, 38.13547087602444, 0.5);
+    }
+}
+
+double LufsChannelWeight(int ch, int channels)
+{
+    if (channels > 3 && ch >= 3) {
+        return 1.41;
+    }
+    return 1.0;
+}
+
+float ClampFloat(float value, float min_value, float max_value)
+{
+    if (value < min_value) return min_value;
+    if (value > max_value) return max_value;
+    return value;
+}
+
+void PushLufsNormalizerBlock(double energy_sum, uint64_t frames)
+{
+    if (frames == 0) {
+        return;
+    }
+
+    constexpr double kAbsoluteGateLufs = -70.0;
+    const double block_mean_square = energy_sum / static_cast<double>(frames);
+    const double block_lufs = (block_mean_square > 0.0)
+        ? (-0.691 + 10.0 * std::log10(block_mean_square))
+        : -std::numeric_limits<double>::infinity();
+
+    if (block_lufs < kAbsoluteGateLufs) {
+        return;
+    }
+
+    LufsBlock& slot = g_lufs_normalizer.blocks[g_lufs_normalizer.block_pos];
+    if (g_lufs_normalizer.block_count == LUFS_NORMALIZER_MAX_BLOCKS) {
+        g_lufs_normalizer.rolling_energy_sum -= slot.energy;
+        g_lufs_normalizer.rolling_frames -= slot.frames;
+    }
+    else {
+        ++g_lufs_normalizer.block_count;
+    }
+
+    slot.energy = energy_sum;
+    slot.frames = frames;
+    g_lufs_normalizer.rolling_energy_sum += energy_sum;
+    g_lufs_normalizer.rolling_frames += frames;
+    g_lufs_normalizer.block_pos =
+        (g_lufs_normalizer.block_pos + 1) % LUFS_NORMALIZER_MAX_BLOCKS;
+
+    if (g_lufs_normalizer.rolling_frames == 0 || g_lufs_normalizer.rolling_energy_sum <= 0.0) {
+        return;
+    }
+
+    const double rolling_mean_square =
+        g_lufs_normalizer.rolling_energy_sum / static_cast<double>(g_lufs_normalizer.rolling_frames);
+    const double rolling_lufs = -0.691 + 10.0 * std::log10(rolling_mean_square);
+
+    constexpr uint64_t kMinAnalysisMs = 3000;
+    const uint64_t min_frames =
+        static_cast<uint64_t>(g_lufs_normalizer.sample_rate) * kMinAnalysisMs / 1000ULL;
+    if (g_lufs_normalizer.rolling_frames < min_frames) {
+        return;
+    }
+
+    g_lufs_normalizer.current_lufs = static_cast<float>(rolling_lufs);
+    g_lufs_normalizer.desired_gain_db =
+        ClampFloat(g_referenceLufs - g_lufs_normalizer.current_lufs, -12.0f, 8.0f);
+}
 
 void ResetDCBlocker()
 {
@@ -125,14 +315,132 @@ void PostLimiterGainRiderStatus(const FinalLimiterActivity& activity, int total_
     }
 }
 
+void PostLufsGainNormalizerStatus()
+{
+    if (!g_hMainWnd) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now - g_lufsNormalizerLastPost < std::chrono::milliseconds(500)) {
+        return;
+    }
+    g_lufsNormalizerLastPost = now;
+
+    float gain_db = g_lufs_normalizer.smoothed_gain_db;
+    if (std::fabs(gain_db) < 0.05f) {
+        gain_db = 0.0f;
+    }
+
+    wchar_t text[96] = {};
+    swprintf_s(text, L"LG %c%3.1f", gain_db < 0.0f ? L'-' : L'+', std::fabs(gain_db));
+
+    auto* payload = new std::wstring(text);
+    if (!PostMessageW(g_hMainWnd, WM_APP_LUFS_NORMALIZER_STATUS, 0, reinterpret_cast<LPARAM>(payload))) {
+        delete payload;
+    }
+}
+
 } // namespace
 
 void ResetRealtimeAudioDspState()
 {
     g_dynamic_autovol = DynamicAutoVolState();
+    ResetLufsGainNormalizerState();
     ResetDCBlocker();
     ResetExciterState();
     ResetDeepBassState();
+}
+
+void AnalyzeLufsGainNormalizer(const float* buffer, size_t frames, int channels, int sample_rate)
+{
+    if (!buffer || frames == 0 || channels <= 0 || sample_rate <= 0) {
+        return;
+    }
+    if (g_lufs_normalizer.sample_rate != sample_rate ||
+        g_lufs_normalizer.channels != channels) {
+        InitLufsGainNormalizerState(channels, sample_rate);
+    }
+
+    const int active_ch = (channels <= LUFS_NORMALIZER_MAX_CHANNELS)
+        ? channels
+        : LUFS_NORMALIZER_MAX_CHANNELS;
+
+    for (size_t frame = 0; frame < frames; ++frame) {
+        double frame_energy = 0.0;
+
+        for (int ch = 0; ch < active_ch; ++ch) {
+            const size_t index = frame * static_cast<size_t>(channels) + static_cast<size_t>(ch);
+            double sample = static_cast<double>(buffer[index]);
+            if (!std::isfinite(sample)) {
+                sample = 0.0;
+            }
+
+            double filtered = g_lufs_normalizer.prefilter[ch].Process(sample);
+            filtered = g_lufs_normalizer.rlb_highpass[ch].Process(filtered);
+            frame_energy += LufsChannelWeight(ch, channels) * filtered * filtered;
+        }
+
+        g_lufs_normalizer.block_energy_sum += frame_energy;
+        ++g_lufs_normalizer.frames_in_block;
+        ++g_lufs_normalizer.frames_seen;
+
+        if (g_lufs_normalizer.frames_in_block >= g_lufs_normalizer.block_frames) {
+            PushLufsNormalizerBlock(
+                g_lufs_normalizer.block_energy_sum,
+                g_lufs_normalizer.frames_in_block);
+            g_lufs_normalizer.block_energy_sum = 0.0;
+            g_lufs_normalizer.frames_in_block = 0;
+        }
+    }
+}
+
+void ApplyLufsGainNormalizer(float* buffer, size_t frames, int channels, int sample_rate)
+{
+    if (!buffer || frames == 0 || channels <= 0 || sample_rate <= 0) {
+        return;
+    }
+    if (g_lufs_normalizer.sample_rate != sample_rate ||
+        g_lufs_normalizer.channels != channels) {
+        return;
+    }
+
+    const float old_gain_db = g_lufs_normalizer.smoothed_gain_db;
+    const float seconds = static_cast<float>(frames) / static_cast<float>(sample_rate);
+    const float max_step_db = 0.50f * seconds;
+    const float diff_db = g_lufs_normalizer.desired_gain_db - old_gain_db;
+
+    if (diff_db > max_step_db) {
+        g_lufs_normalizer.smoothed_gain_db += max_step_db;
+    }
+    else if (diff_db < -max_step_db) {
+        g_lufs_normalizer.smoothed_gain_db -= max_step_db;
+    }
+    else {
+        g_lufs_normalizer.smoothed_gain_db = g_lufs_normalizer.desired_gain_db;
+    }
+
+    const float new_gain_db = g_lufs_normalizer.smoothed_gain_db;
+    const float old_gain = std::pow(10.0f, old_gain_db / 20.0f);
+    const float new_gain = std::pow(10.0f, new_gain_db / 20.0f);
+    const float gain_step = (frames > 1)
+        ? ((new_gain - old_gain) / static_cast<float>(frames - 1))
+        : 0.0f;
+    float gain = old_gain;
+
+    for (size_t frame = 0; frame < frames; ++frame) {
+        float* frame_ptr = buffer + frame * static_cast<size_t>(channels);
+        for (int ch = 0; ch < channels; ++ch) {
+            float sample = frame_ptr[ch];
+            if (!std::isfinite(sample)) {
+                sample = 0.0f;
+            }
+            frame_ptr[ch] = sample * gain;
+        }
+        gain += gain_step;
+    }
+
+    PostLufsGainNormalizerStatus();
 }
 
 void RemoveDCOffset(float* buffer, size_t frames, int channels, int sample_rate)

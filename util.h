@@ -27,6 +27,8 @@ std::string av_error_string(int errnum);
 // Структура для хранения информации о каждом элементе плейлиста
 struct PlaylistItem {
     std::wstring name;
+    std::wstring name_icy;
+    bool disable_name_icy = false;
     std::wstring url;
 };
 

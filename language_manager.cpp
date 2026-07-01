@@ -138,7 +138,15 @@ static const char* GetDefaultRussianLanguageText()
         "tray.exit=Выход\n"
         "context.reload_m3u=Обновить m3u\n"
         "context.add_station=Добавить станцию\n"
+        "context.edit_station=Изменить название станции\n"
+        "context.save_station=Сохранить радиостанцию\n"
         "context.delete_station=Удалить станцию\n"
+        "edit_station.title=Изменить название станции\n"
+        "edit_station.msg.enter_name=Введите название станции.\n"
+        "edit_station.msg.one_line=Название станции должно быть записано в одну строку.\n"
+        "edit_station.msg.too_long=Название станции не должно быть длиннее 128 символов.\n"
+        "edit_station.msg.create_failed=Не удалось создать форму изменения станции.\n"
+        "edit_station.msg.open_failed=Не удалось открыть форму изменения станции.\n"
         "add.title=Добавить станцию\n"
         "add.name_label=Название станции:\n"
         "add.url_label=URL - адрес:\n"
@@ -242,7 +250,15 @@ static const char* GetDefaultEnglishLanguageText()
         "tray.exit=Exit\n"
         "context.reload_m3u=Reload m3u\n"
         "context.add_station=Add station\n"
+        "context.edit_station=Edit station name\n"
+        "context.save_station=Save station\n"
         "context.delete_station=Delete station\n"
+        "edit_station.title=Edit station name\n"
+        "edit_station.msg.enter_name=Enter a station name.\n"
+        "edit_station.msg.one_line=Station name must fit on one line.\n"
+        "edit_station.msg.too_long=Station name must not be longer than 128 characters.\n"
+        "edit_station.msg.create_failed=Could not create the station edit form.\n"
+        "edit_station.msg.open_failed=Could not open the station edit form.\n"
         "add.title=Add station\n"
         "add.name_label=Station name:\n"
         "add.url_label=URL address:\n"
@@ -424,25 +440,6 @@ std::wstring TrString(const char* key, const wchar_t* fallback)
     }
 
     return fallback ? fallback : L"";
-}
-
-static std::wstring GetLanguageDisplayName(const std::filesystem::path& path)
-{
-    auto strings = LoadLanguageFile(path);
-    auto it = strings.find("language.name");
-    if (HasLanguageIdentity(strings)) {
-        return it->second;
-    }
-
-    const std::wstring id = path.stem().wstring();
-    if (id == L"russian") {
-        return L"Русский";
-    }
-    if (id == L"english") {
-        return L"English";
-    }
-
-    return path.stem().wstring();
 }
 
 void LoadAvailableLanguages()

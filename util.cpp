@@ -18,9 +18,11 @@
 #include <filesystem>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <regex>
 #include <algorithm>
 #include <cctype>
+#include <cwctype>
 #include <commctrl.h>
 #include <chrono>
 
@@ -345,6 +347,9 @@ static bool read_wstring_limited(std::ifstream& ifs, std::wstring& value, size_t
 }
 
 
+static constexpr char kPlaylistIcyFlagsMagic[] = "ICYF001";
+static constexpr char kLufsGainNormalizerMagic[] = "LUFS001";
+
 void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistItem>& playlist, int selectedIndex) {
     std::ofstream ofs(filename, std::ios::binary);
     if (!ofs.is_open()) {
@@ -385,7 +390,15 @@ void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistI
     ofs.write(reinterpret_cast<const char*>(&g_trackToastY), sizeof(g_trackToastY));
     write_wstring(ofs, g_languageId);
 
+    ofs.write(kPlaylistIcyFlagsMagic, sizeof(kPlaylistIcyFlagsMagic));
+    size_t flagsCount = playlist.size();
+    ofs.write(reinterpret_cast<const char*>(&flagsCount), sizeof(flagsCount));
+    for (const auto& item : playlist) {
+        ofs.write(reinterpret_cast<const char*>(&item.disable_name_icy), sizeof(item.disable_name_icy));
+    }
 
+    ofs.write(kLufsGainNormalizerMagic, sizeof(kLufsGainNormalizerMagic));
+    ofs.write(reinterpret_cast<const char*>(&g_enableLufsGainNormalizer), sizeof(g_enableLufsGainNormalizer));
 }
 
 bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>& playlist, int& selectedIndex) {
@@ -544,6 +557,45 @@ bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>
         g_languageId = languageId;
     }
     else {
+        ifs.clear();
+    }
+
+    char flagsMagic[sizeof(kPlaylistIcyFlagsMagic)] = {};
+    ifs.read(flagsMagic, sizeof(flagsMagic));
+    if (!ifs.fail() && memcmp(flagsMagic, kPlaylistIcyFlagsMagic, sizeof(kPlaylistIcyFlagsMagic)) == 0) {
+        size_t flagsCount = 0;
+        ifs.read(reinterpret_cast<char*>(&flagsCount), sizeof(flagsCount));
+        if (!ifs.fail()) {
+            const size_t readCount = (std::min)(flagsCount, playlist.size());
+            for (size_t i = 0; i < readCount; ++i) {
+                bool disableNameIcy = false;
+                ifs.read(reinterpret_cast<char*>(&disableNameIcy), sizeof(disableNameIcy));
+                if (ifs.fail()) {
+                    break;
+                }
+                playlist[i].disable_name_icy = disableNameIcy;
+            }
+
+            for (size_t i = readCount; i < flagsCount && !ifs.fail(); ++i) {
+                bool ignored = false;
+                ifs.read(reinterpret_cast<char*>(&ignored), sizeof(ignored));
+            }
+        }
+    }
+    if (ifs.fail()) {
+        ifs.clear();
+    }
+
+    char lufsMagic[sizeof(kLufsGainNormalizerMagic)] = {};
+    ifs.read(lufsMagic, sizeof(lufsMagic));
+    if (!ifs.fail() && memcmp(lufsMagic, kLufsGainNormalizerMagic, sizeof(kLufsGainNormalizerMagic)) == 0) {
+        bool lufsGainNormalizer = g_enableLufsGainNormalizer;
+        ifs.read(reinterpret_cast<char*>(&lufsGainNormalizer), sizeof(lufsGainNormalizer));
+        if (!ifs.fail()) {
+            g_enableLufsGainNormalizer = lufsGainNormalizer;
+        }
+    }
+    if (ifs.fail()) {
         ifs.clear();
     }
     return true;
@@ -1507,8 +1559,6 @@ static std::string rational_to_string(const AVRational& r) {
     return ss.str();
 }
 
-static bool is_nonempty(const char* s) { return s && *s; }
-
 std::string oldssout = "";
 static int g_displayedCodecparKbit = 0;
 void print_and_check_all_metadata(AVFormatContext* fmt, std::string& out) {
@@ -1516,6 +1566,7 @@ void print_and_check_all_metadata(AVFormatContext* fmt, std::string& out) {
     if (!fmt) return;
     
     out.clear();
+    const bool streamInfoAllowed = g_audioStreamInfoAllowed.load();
 
     AVDictionaryEntry* tag = nullptr;
     // Format-level metadata
@@ -1580,7 +1631,7 @@ void print_and_check_all_metadata(AVFormatContext* fmt, std::string& out) {
 
 			//LogToUI(out);
 
-            if (oldssout == out) continue;
+            if (streamInfoAllowed && oldssout == out) continue;
             // Формируем однострочный текст для заголовка
             std::ostringstream header_ss;
 
@@ -1595,13 +1646,12 @@ void print_and_check_all_metadata(AVFormatContext* fmt, std::string& out) {
                     [](unsigned char c) { return std::toupper(c); });
                 header_ss << codec_name;
             }
+            int pendingCodecparKbit = 0;
             if (st->codecpar->bit_rate > 0) {
-                int kbit = static_cast<int>((st->codecpar->bit_rate) / 1000); // округление к ближайшему
-                if (g_displayedCodecparKbit <= 0) {
-                    g_displayedCodecparKbit = kbit;
-                }
+                pendingCodecparKbit = static_cast<int>((st->codecpar->bit_rate) / 1000); // округление к ближайшему
+                const int displayedKbit = (g_displayedCodecparKbit > 0) ? g_displayedCodecparKbit : pendingCodecparKbit;
                 append_dot();
-                header_ss << g_displayedCodecparKbit << "kbps";
+                header_ss << displayedKbit << "kbps";
             }
             if (st->codecpar->sample_rate > 0) {
                 float srate = st->codecpar->sample_rate / 1000.0f;
@@ -1612,13 +1662,15 @@ void print_and_check_all_metadata(AVFormatContext* fmt, std::string& out) {
             }
             std::string header_str = header_ss.str();
 
-            if (!header_str.empty()) {
+            if (!header_str.empty() && streamInfoAllowed) {
+                if (pendingCodecparKbit > 0 && g_displayedCodecparKbit <= 0) {
+                    g_displayedCodecparKbit = pendingCodecparKbit;
+                }
                 PostUiWideMessage(WM_APP_STREAM_INFO, utf8_to_wstring(header_str));
+                oldssout = out;
             }
         }
     }
-
-    oldssout = out;
 	
 }
 
@@ -1756,6 +1808,80 @@ std::string remove_prefix(std::string s) {
     return s; // если шаблон не найден — вернуть как есть
 }
 
+static std::string ToLowerAsciiCopy(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+static std::wstring TrimWideMetadata(std::wstring value)
+{
+    value.erase(value.begin(),
+        std::find_if(value.begin(), value.end(), [](wchar_t ch) { return !std::iswspace(ch); }));
+    value.erase(
+        std::find_if(value.rbegin(), value.rend(), [](wchar_t ch) { return !std::iswspace(ch); }).base(),
+        value.end());
+    return value;
+}
+
+static std::wstring SanitizeIcyStationName(const std::string& value)
+{
+    std::wstring stationName = DecodeMetadataToWideString(TrimAscii(value));
+    for (wchar_t& ch : stationName) {
+        if (ch == L'\r' || ch == L'\n' || ch == L'\t') {
+            ch = L' ';
+        }
+    }
+
+    stationName = TrimWideMetadata(stationName);
+    if (stationName.size() > 128) {
+        stationName.resize(128);
+        stationName = TrimWideMetadata(stationName);
+    }
+
+    return stationName;
+}
+
+static void PostIcyStationNameFromMetadata(const std::map<std::string, std::string>& metaMap)
+{
+    if (!g_enableIcyStationNameUpdates) {
+        return;
+    }
+
+    static const char* stationNameKeys[] = {
+        "icy-name",
+        "ice-name",
+        "x-audiocast-name"
+    };
+
+    std::wstring stationName;
+    for (const auto& pair : metaMap) {
+        const std::string lowerKey = ToLowerAsciiCopy(pair.first);
+        for (const char* stationNameKey : stationNameKeys) {
+            if (lowerKey == stationNameKey) {
+                stationName = SanitizeIcyStationName(pair.second);
+                break;
+            }
+        }
+        if (!stationName.empty()) {
+            break;
+        }
+    }
+
+    if (stationName.empty() || !g_hMainWnd) {
+        return;
+    }
+
+    auto* payload = new StationNameFromIcyPayload();
+    payload->generation = g_playbackGeneration.load();
+    payload->name = std::move(stationName);
+
+    if (!PostMessageW(g_hMainWnd, WM_APP_STATION_NAME_FROM_ICY, 0, reinterpret_cast<LPARAM>(payload))) {
+        delete payload;
+    }
+}
+
 // Function to get metadata from format context
 void update_stream_metadata() {
 
@@ -1804,6 +1930,8 @@ void update_stream_metadata() {
             meta_map[key] = value;
         }
     }
+
+    PostIcyStationNameFromMetadata(meta_map);
 
     // Function to find value by key (exact match)
     auto find_value = [&meta_map](const std::string& key) -> std::string {
@@ -2052,8 +2180,9 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
     auto last_elapsed_update = playback_start;
     auto lastDecodedAudioOutput = playback_start;
     bool reconnectAttemptsResetAfterStablePlayback = false;
-    constexpr auto kStablePlaybackBeforeReconnectReset = std::chrono::seconds(10);
-    constexpr auto kCodecErrorStormBeforeReconnect = std::chrono::seconds(3);
+    constexpr auto kStablePlaybackBeforeReconnectReset = std::chrono::seconds(5);
+    constexpr auto kCodecErrorStormBeforeReconnect = std::chrono::seconds(5);
+    constexpr auto kBadServerDataBeforeUrlReload = std::chrono::seconds(10);
     constexpr int kCodecErrorStormReconnectMinErrors = 10;
 
 
@@ -2076,6 +2205,9 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
     bool audioInputProfileGateOpen = false;
     bool inputProfileMismatchReported = false;
     bool badServerDataStatusPosted = false;
+    bool badServerDataActive = false;
+    bool badServerDataReloadRequested = false;
+    auto badServerDataStart = playback_start;
     int codecErrorStormCount = 0;
     bool codecErrorStormActive = false;
     bool codecErrorStormReported = false;
@@ -2083,6 +2215,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
     constexpr int kStableInputFramesBeforePlayback = 5;
 
     g_suppressFfmpegDecoderLog.store(false);
+    g_audioStreamInfoAllowed.store(false);
 
     if (reconnect_attempts > 0 &&
         CopyStableAudioInputProfileForUrl(radioUrl,
@@ -2112,8 +2245,34 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
     auto post_bad_server_data_status = [&]() {
         if (!badServerDataStatusPosted) {
             PostFfmpegStatus(TrString("status.skipping_bad_server_data", L"Пропускаем битые данные от сервера..."));
+            PostUiWideMessage(WM_APP_STREAM_INFO, L"");
             badServerDataStatusPosted = true;
         }
+        };
+
+    auto request_url_reload_after_bad_server_data = [&]() -> bool {
+        LogToUI("FFmpeg PlaybackLoop: bad server data timeout, reloading URL");
+        PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 1);
+        badServerDataReloadRequested = true;
+        return true;
+        };
+
+    auto note_bad_server_data = [&]() -> bool {
+        const auto now = std::chrono::steady_clock::now();
+        if (!badServerDataActive) {
+            badServerDataActive = true;
+            badServerDataStart = now;
+        }
+
+        post_bad_server_data_status();
+
+        if (!badServerDataReloadRequested &&
+            now - badServerDataStart >= kBadServerDataBeforeUrlReload &&
+            now - lastDecodedAudioOutput >= kBadServerDataBeforeUrlReload) {
+            return request_url_reload_after_bad_server_data();
+        }
+
+        return false;
         };
 
     auto note_codec_error = [&](const char* context, int errnum) -> bool {
@@ -2126,7 +2285,8 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
         ++codecErrorStormCount;
         audioInputProfileGateOpen = false;
         g_suppressFfmpegDecoderLog.store(true);
-        post_bad_server_data_status();
+        g_audioStreamInfoAllowed.store(false);
+        note_bad_server_data();
         av_channel_layout_uninit(&pendingInputLayout);
         pendingInputLayout = {};
         pendingInputSampleRate = 0;
@@ -2215,7 +2375,10 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
             ResetRealtimeAudioDspState();
             audioInputProfileGateOpen = true;
             g_suppressFfmpegDecoderLog.store(false);
+            g_audioStreamInfoAllowed.store(true);
             badServerDataStatusPosted = false;
+            badServerDataActive = false;
+            badServerDataReloadRequested = false;
             reset_input_profile_mismatch();
             reset_pending_input_params();
 
@@ -2253,7 +2416,8 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
             decodedFrame->format >= AV_SAMPLE_FMT_NB) {
             audioInputProfileGateOpen = false;
             g_suppressFfmpegDecoderLog.store(true);
-            post_bad_server_data_status();
+            g_audioStreamInfoAllowed.store(false);
+            note_bad_server_data();
             reset_pending_input_params();
             return false;
         }
@@ -2262,14 +2426,16 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
         if (!GetFrameChannelLayout(decodedFrame, &frameLayout)) {
             audioInputProfileGateOpen = false;
             g_suppressFfmpegDecoderLog.store(true);
-            post_bad_server_data_status();
+            g_audioStreamInfoAllowed.store(false);
+            note_bad_server_data();
             reset_pending_input_params();
             return false;
         }
         if (frameLayout.nb_channels <= 0 || frameLayout.nb_channels > 8) {
             audioInputProfileGateOpen = false;
             g_suppressFfmpegDecoderLog.store(true);
-            post_bad_server_data_status();
+            g_audioStreamInfoAllowed.store(false);
+            note_bad_server_data();
             reset_pending_input_params();
             av_channel_layout_uninit(&frameLayout);
             return false;
@@ -2297,7 +2463,10 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
 
         if (audioInputProfileGateOpen && sameAsCurrent) {
             g_suppressFfmpegDecoderLog.store(false);
+            g_audioStreamInfoAllowed.store(true);
             badServerDataStatusPosted = false;
+            badServerDataActive = false;
+            badServerDataReloadRequested = false;
             reset_input_profile_mismatch();
             reset_pending_input_params();
             av_channel_layout_uninit(&frameLayout);
@@ -2307,7 +2476,8 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
         if (hasCurrentInput && !sameAsCurrent) {
             audioInputProfileGateOpen = false;
             g_suppressFfmpegDecoderLog.store(true);
-            post_bad_server_data_status();
+            g_audioStreamInfoAllowed.store(false);
+            note_bad_server_data();
             reset_pending_input_params();
 
             if (!inputProfileMismatchReported) {
@@ -2322,7 +2492,8 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
         if (!hasCurrentInput) {
             if (hasSourceInput && !sameAsSource) {
                 g_suppressFfmpegDecoderLog.store(true);
-                post_bad_server_data_status();
+                g_audioStreamInfoAllowed.store(false);
+                note_bad_server_data();
                 reset_pending_input_params();
                 if (!inputProfileMismatchReported) {
                     LogToUI("FFmpeg PlaybackLoop: decoded frame profile differs from fixed stream profile, waiting for fixed profile");
@@ -2343,7 +2514,10 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
         if (ok) {
             audioInputProfileGateOpen = true;
             g_suppressFfmpegDecoderLog.store(false);
+            g_audioStreamInfoAllowed.store(true);
             badServerDataStatusPosted = false;
+            badServerDataActive = false;
+            badServerDataReloadRequested = false;
             reset_input_profile_mismatch();
             reset_pending_input_params();
         }
@@ -2358,6 +2532,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
     while (running.load()) {
 
         if (g_quit_flag.load())  break;
+        if (badServerDataReloadRequested) break;
 
         if (!formatCtx) {// dummy error handling
 
@@ -2398,8 +2573,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                     if (reconnect_attempts < MAX_RECONNECT_ATTEMPTS) {
                         // Wait before retrying??
                         PostFfmpegStatus(TrString("status.stream_read_error_reconnect", L"Ошибка чтения потока. Переподключение..."));
-                        const int nextAttempt = ++reconnect_attempts;
-                        PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, nextAttempt);
+                        PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 1);
                         break;
 
                     }
@@ -2447,13 +2621,18 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                     // Defensive check for frame data
                     if (!frame || !frame->data[0]) {
                         audioInputProfileGateOpen = false;
+                        g_suppressFfmpegDecoderLog.store(true);
+                        g_audioStreamInfoAllowed.store(false);
+                        note_bad_server_data();
                         reset_pending_input_params();
                         av_frame_unref(frame);
+                        if (badServerDataReloadRequested) break;
                         continue;
                     }
 
                     if (!is_audio_frame_profile_allowed(frame)) {
                         av_frame_unref(frame);
+                        if (badServerDataReloadRequested) break;
                         continue;
                     }
 
@@ -2607,9 +2786,19 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                         int total_samples = converted_count * channels;
 
                         /*DSP фильтры*/
+                        if (g_enableLufsGainNormalizer) {
+                            AnalyzeLufsGainNormalizer(audio_data, static_cast<size_t>(converted_count),
+                                pwfx->nChannels, static_cast<int>(pwfx->nSamplesPerSec));
+                        }
+
                         // Remove DC offset first so downstream stages see a clean signal
                         RemoveDCOffset(audio_data, static_cast<size_t>(converted_count),
                             pwfx->nChannels, static_cast<int>(pwfx->nSamplesPerSec));
+
+                        if (g_enableLufsGainNormalizer) {
+                            ApplyLufsGainNormalizer(audio_data, static_cast<size_t>(converted_count),
+                                pwfx->nChannels, static_cast<int>(pwfx->nSamplesPerSec));
+                        }
 
                         if (g_enableDynamicAutoVolume) {
                             ProcessDynamicAutoVolume(audio_data, static_cast<size_t>(converted_count), pwfx->nChannels, static_cast<int>(pwfx->nSamplesPerSec));
@@ -2740,7 +2929,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
 
                                     if (old_sample_rate > 0 && pwfx->nSamplesPerSec != old_sample_rate) {
 
-                                        PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, ++reconnect_attempts);
+                                        PostMessageW(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 1);
 
                                     }
 
@@ -2754,7 +2943,6 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                                         running.store(false);
                                         break;
                                     }
-                                    PostFfmpegStatus(L"\u25B7 00:00");
                                     continue;
                                     
                                 }
@@ -2818,6 +3006,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
         }
 
         av_packet_unref(packet);
+        if (badServerDataReloadRequested) break;
     }
 
     PostMessage(g_hMainWnd, WM_APP_UPDATE_ICON, 0, 0);
@@ -2830,6 +3019,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
     av_channel_layout_uninit(&sourceInputLayout);
     av_channel_layout_uninit(&pendingInputLayout);
     g_suppressFfmpegDecoderLog.store(false);
+    g_audioStreamInfoAllowed.store(false);
 
     if (pwfx)
     {

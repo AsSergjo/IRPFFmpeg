@@ -51,6 +51,7 @@ constexpr int METADATA_UPDATE_INTERVAL_MS = 1000; // Metadata check interval 1 s
 extern std::atomic<bool> running;
 extern std::atomic_bool g_quit_flag;
 extern std::atomic_bool g_suppressFfmpegDecoderLog;
+extern std::atomic_bool g_audioStreamInfoAllowed;
 extern std::atomic_bool g_enableDebugLogFile;//включить логирование в файл debug.log
 extern std::string current_track;
 extern std::string current_metadata;
@@ -84,9 +85,11 @@ extern std::atomic<float> current_eq_gain_bass;
 extern std::atomic<unsigned long> g_playbackGeneration;
 extern bool g_enableStereoWidth;
 extern bool g_enableDynamicAutoVolume;
+extern bool g_enableLufsGainNormalizer;
 extern bool g_enableExciter;
 extern bool g_enableDeepBass;
 extern bool g_enableLimiterGainRider;
+extern bool g_enableIcyStationNameUpdates;
 extern bool g_minimizeToTray;
 extern bool g_showTrackToastInTray;
 extern bool g_trackToastPositionSaved;
@@ -133,6 +136,14 @@ extern const int maxVisibleExtent;
 #define WM_APP_ELAPSED_TIME  (WM_APP + 7)
 #define WM_APP_SET_VOLUME_SLIDER (WM_APP + 8)
 #define WM_APP_RESTORE_FROM_SINGLE_INSTANCE (WM_APP + 15)
+#define WM_APP_STATION_NAME_FROM_ICY (WM_APP + 16)
+#define WM_APP_ENSURE_FOREGROUND (WM_APP + 17)
+#define WM_APP_LUFS_NORMALIZER_STATUS (WM_APP + 18)
+
+struct StationNameFromIcyPayload {
+    unsigned long generation = 0;
+    std::wstring name;
+};
 
 HRESULT InitWASAPI(IAudioClient*& audioClient, IAudioRenderClient*& renderClient, WAVEFORMATEX*& pwfx, UINT32& bufferFrameCount);
 SwrContext* InitSwResample(AVCodecContext* inputCtx, WAVEFORMATEX* wasapiFormat);

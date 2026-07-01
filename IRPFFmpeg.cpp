@@ -70,6 +70,7 @@ HWND g_hNowPlayingBar = NULL;
 // ------------------------------- 
 std::atomic<bool> running(false);
 std::atomic_bool g_suppressFfmpegDecoderLog(false);
+std::atomic_bool g_audioStreamInfoAllowed(false);
 std::atomic_bool g_enableDebugLogFile(false);// true - включить логирование в файл debug.log, false - отключить
 std::string current_track;
 std::string current_metadata;
@@ -94,9 +95,11 @@ std::atomic<float> current_eq_gain_bass(2.0f);
 std::atomic<unsigned long> g_playbackGeneration(0);
 bool g_enableStereoWidth = true;
 bool g_enableDynamicAutoVolume = false;
+bool g_enableLufsGainNormalizer = false;
 bool g_enableExciter = false;
 bool g_enableDeepBass = false;
 bool g_enableLimiterGainRider = true;
+bool g_enableIcyStationNameUpdates = true;
 bool g_minimizeToTray = true;
 bool g_showTrackToastInTray = true;
 bool g_trackToastPositionSaved = false;
@@ -151,6 +154,7 @@ static std::wstring g_nowPlayingStatus = L"Остановлено";
 static std::wstring g_nowPlayingStreamInfo;
 static std::wstring g_nowPlayingElapsed;
 static std::wstring g_limiterRiderStatus;
+static std::wstring g_lufsNormalizerStatus;
 static bool g_isReallyExiting = false;
 static bool g_trayIconAdded = false;
 static bool g_isInTray = false;
@@ -272,6 +276,54 @@ static void UpdatePlayPauseButtonIcon(HWND hDlg)
     }
 }
 
+static void ForceForegroundWindow(HWND hWnd)
+{
+    if (!hWnd || !IsWindow(hWnd)) {
+        return;
+    }
+
+    if (IsIconic(hWnd)) {
+        ShowWindow(hWnd, SW_RESTORE);
+    }
+    else {
+        ShowWindow(hWnd, SW_SHOWNORMAL);
+    }
+
+    HWND hForeground = GetForegroundWindow();
+    DWORD foregroundThreadId = GetWindowThreadProcessId(hForeground, nullptr);
+    DWORD currentThreadId = GetCurrentThreadId();
+
+    bool attached = false;
+    if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId) {
+        attached = AttachThreadInput(foregroundThreadId, currentThreadId, TRUE) != FALSE;
+    }
+
+    BringWindowToTop(hWnd);
+    SetActiveWindow(hWnd);
+    SetForegroundWindow(hWnd);
+    SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+
+    if (attached) {
+        AttachThreadInput(foregroundThreadId, currentThreadId, FALSE);
+    }
+}
+
+static std::wstring GetPlaylistDisplayName(int index)
+{
+    if (index < 0 || index >= static_cast<int>(playlist.size())) {
+        return std::wstring();
+    }
+
+    if (g_enableIcyStationNameUpdates &&
+        !playlist[index].disable_name_icy &&
+        !playlist[index].name_icy.empty()) {
+        return playlist[index].name_icy;
+    }
+
+    return playlist[index].name;
+}
+
 static std::wstring GetNowPlayingTitleText()
 {
     if (!g_nowPlayingTitle.empty()) {
@@ -280,7 +332,7 @@ static std::wstring GetNowPlayingTitleText()
 
     if (g_currentlyPlayingIndex >= 0 &&
         g_currentlyPlayingIndex < static_cast<int>(playlist.size())) {
-        return playlist[g_currentlyPlayingIndex].name;
+        return GetPlaylistDisplayName(g_currentlyPlayingIndex);
     }
 
     return Tr("nowplaying.no_data", L"Нет данных о треке");
@@ -493,25 +545,6 @@ static HFONT CreateTrackToastTitleFont()
     return CreateFontIndirectW(&lf);
 }
 
-static int GetTrackToastOverlayHeight(HWND hWnd)
-{
-    HDC hdc = GetDC(hWnd);
-    if (!hdc) {
-        return 22;
-    }
-
-    HFONT hTitleFont = CreateTrackToastTitleFont();
-    RECT rc = {};
-    GetClientRect(hWnd, &rc);
-    int overlayHeight = CalculateTrackToastOverlayHeight(hdc, rc.right - rc.left, hTitleFont);
-
-    if (hTitleFont) {
-        DeleteObject(hTitleFont);
-    }
-    ReleaseDC(hWnd, hdc);
-    return overlayHeight;
-}
-
 static void LayoutTrackToastText(HWND hWnd)
 {
     if (!g_hTrackToastText) {
@@ -520,7 +553,16 @@ static void LayoutTrackToastText(HWND hWnd)
 
     RECT rc = {};
     GetClientRect(hWnd, &rc);
-    const int overlayHeight = GetTrackToastOverlayHeight(hWnd);
+    int overlayHeight = 22;
+    HDC overlayDc = GetDC(hWnd);
+    if (overlayDc) {
+        HFONT hTitleFont = CreateTrackToastTitleFont();
+        overlayHeight = CalculateTrackToastOverlayHeight(overlayDc, rc.right - rc.left, hTitleFont);
+        if (hTitleFont) {
+            DeleteObject(hTitleFont);
+        }
+        ReleaseDC(hWnd, overlayDc);
+    }
     SetWindowPos(g_hTrackToastText, HWND_TOP, 0, 0, rc.right - rc.left, overlayHeight,
         SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(g_hTrackToastText, nullptr, TRUE);
@@ -567,7 +609,16 @@ static void DrawTrackToast(HWND hWnd, HDC hdc)
     GetClientRect(hWnd, &rc);
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
-    const int overlayHeight = GetTrackToastOverlayHeight(hWnd);
+    int overlayHeight = 22;
+    HDC overlayDc = GetDC(hWnd);
+    if (overlayDc) {
+        HFONT hTitleFont = CreateTrackToastTitleFont();
+        overlayHeight = CalculateTrackToastOverlayHeight(overlayDc, width, hTitleFont);
+        if (hTitleFont) {
+            DeleteObject(hTitleFont);
+        }
+        ReleaseDC(hWnd, overlayDc);
+    }
 
     if (EnsureTrackToastSdl(hWnd)) {
         SDL_SetRenderDrawColor(g_trackToastRenderer, 35, 38, 44, 255);
@@ -886,32 +937,46 @@ static bool IsTransientPlaybackStatus(const std::wstring& status)
     return false;
 }
 
-static bool IsBadServerDataStatus(const std::wstring& status)
-{
-    return status == TrString("status.skipping_bad_server_data", L"Пропускаем битые данные от сервера...") ||
-           status == L"Пропускаем битые данные от сервера..." ||
-           status == L"Skipping corrupted data from server...";
-}
-
 static std::wstring GetNowPlayingBarText()
 {
-    const bool appendBadServerDataStatus = IsBadServerDataStatus(g_nowPlayingStatus);
+    const bool appendBadServerDataStatus =
+        g_nowPlayingStatus == TrString("status.skipping_bad_server_data", L"Пропускаем битые данные от сервера...") ||
+        g_nowPlayingStatus == L"Пропускаем битые данные от сервера..." ||
+        g_nowPlayingStatus == L"Skipping corrupted data from server...";
+    const bool showStreamInfo =
+        !appendBadServerDataStatus &&
+        g_audioStreamInfoAllowed.load() &&
+        !g_nowPlayingStreamInfo.empty();
+    const bool showLimiterStatus =
+        g_enableLimiterGainRider && running.load() && !g_limiterRiderStatus.empty();
+    const bool showLufsStatus =
+        g_enableLufsGainNormalizer && running.load() && !g_lufsNormalizerStatus.empty();
+
     if (!appendBadServerDataStatus && IsTransientPlaybackStatus(g_nowPlayingStatus)) {
         return g_nowPlayingStatus;
     }
 
     std::wstring barText;
 
-    if (running.load() && !g_nowPlayingElapsed.empty()) {
+    if ((showStreamInfo || appendBadServerDataStatus || showLimiterStatus || showLufsStatus) &&
+        running.load() &&
+        !g_nowPlayingElapsed.empty()) {
         barText = L"▷ ";
         barText += g_nowPlayingElapsed;
     }
 
-    if (g_enableLimiterGainRider && running.load() && !g_limiterRiderStatus.empty()) {
+    if (showLimiterStatus) {
         if (!barText.empty()) {
             barText += L"   ";
         }
         barText += g_limiterRiderStatus;
+    }
+
+    if (showLufsStatus) {
+        if (!barText.empty()) {
+            barText += L"   ";
+        }
+        barText += g_lufsNormalizerStatus;
     }
 
     if (appendBadServerDataStatus) {
@@ -921,7 +986,7 @@ static std::wstring GetNowPlayingBarText()
         barText += g_nowPlayingStatus;
     }
 
-    if (!appendBadServerDataStatus && !g_nowPlayingStreamInfo.empty()) {
+    if (showStreamInfo) {
         if (!barText.empty()) {
             barText += L"   ";
         }
@@ -1049,11 +1114,6 @@ static void AddTooltip(HWND hTooltip, HWND hParent, HWND hControl, const wchar_t
     SendMessageW(hTooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
 }
 
-static void AddDlgItemTooltip(HWND hTooltip, HWND hDlg, int controlId, const wchar_t* text)
-{
-    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, controlId), text);
-}
-
 static void SetupMainDialogTooltips(HWND hDlg);
 
 static void PopulateLanguageCombo(HWND hDlg)
@@ -1097,6 +1157,7 @@ static void ApplySettingsDialogLanguage(HWND hDlg)
     SetDlgItemTextW(hDlg, IDC_CHECK_EXCITER, Tr("settings.effect.exciter", L" Exciter / Яркость"));
     SetDlgItemTextW(hDlg, IDC_CHECK_DEEP_BASS, Tr("settings.effect.deep_bass", L" DeepBass / Глубокий Бас"));
     SetDlgItemTextW(hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, Tr("settings.effect.dynamic_auto_volume", L" Динамическая Регулировка Усиления"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER, Tr("settings.effect.lufs_gain_normalizer", L" LUFS-нормализация станций"));
     SetDlgItemTextW(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, Tr("settings.effect.gain_rider", L" GainRider / Контроль Пиков"));
     SetDlgItemTextW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, Tr("settings.program.minimize_to_tray", L" При минимизации отправлять в трей"));
     SetDlgItemTextW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, Tr("settings.program.show_track_toast", L" В трее показывать обложку при смене трека"));
@@ -1117,37 +1178,31 @@ static void ApplyMainDialogLanguage(HWND hDlg)
 static void SetupMainDialogTooltips(HWND hDlg)
 {
     HWND hTooltip = CreateTooltipWindow(hDlg);
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_PP, Tr("tooltip.play_stop", L"Воспроизвести или остановить текущую станцию"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_REV, Tr("tooltip.prev_station", L"Перейти к предыдущей станции в списке"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_FORV, Tr("tooltip.next_station", L"Перейти к следующей станции в списке"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_PREVIOUS_STATION, Tr("tooltip.previous_station", L"Вернуться к ранее звучавшей станции"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_BUTTON_REC, Tr("tooltip.record", L"Начать или остановить запись текущего потока"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_ST_SETTING, Tr("tooltip.settings", L"Открыть настройки программы"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_BASS, Tr("tooltip.slider.bass", L"Низкие Частоты"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_HI, Tr("tooltip.slider.treble", L"Высокие Частоты"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_SLIDER_VOL, Tr("tooltip.slider.volume", L"Громкость"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_PP), Tr("tooltip.play_stop", L"Воспроизвести или остановить текущую станцию"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_REV), Tr("tooltip.prev_station", L"Перейти к предыдущей станции в списке"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_FORV), Tr("tooltip.next_station", L"Перейти к следующей станции в списке"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_PREVIOUS_STATION), Tr("tooltip.previous_station", L"Вернуться к ранее звучавшей станции"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_REC), Tr("tooltip.record", L"Начать или остановить запись текущего потока"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_ST_SETTING), Tr("tooltip.settings", L"Открыть настройки программы"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_SLIDER_BASS), Tr("tooltip.slider.bass", L"Низкие Частоты"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_SLIDER_HI), Tr("tooltip.slider.treble", L"Высокие Частоты"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_SLIDER_VOL), Tr("tooltip.slider.volume", L"Громкость"));
 }
 
 static void SetupSettingsDialogTooltips(HWND hDlg)
 {
     HWND hTooltip = CreateTooltipWindow(hDlg);
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_MP3, Tr("tooltip.recording.mp3", L"Записывать поток в MP3 320 kbit/sec"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_FLAC, Tr("tooltip.recording.flac", L"Записывать поток в FLAC без потерь"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_STEREO_WIDTH, Tr("tooltip.effect.stereo_width", L"Включить расширение стереобазы"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_EXCITER, Tr("tooltip.effect.exciter", L"Добавить яркость и выразительность верхним частотам"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_DEEP_BASS, Tr("tooltip.effect.deep_bass", L"Усилить глубину низких частот"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, Tr("tooltip.effect.dynamic_auto_volume", L"Автоматически выравнивать громкость воспроизведения"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, Tr("tooltip.effect.gain_rider", L"Контролировать пики и удерживать комфортный уровень сигнала"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, Tr("tooltip.program.minimize_to_tray", L"При нажатии кнопки свернуть прятать программу в трей"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDC_CHECK_SHOW_TRACK_TOAST, Tr("tooltip.program.show_track_toast", L"Когда программа в трее, показывать обложку при смене трека"));
-    AddDlgItemTooltip(hTooltip, hDlg, IDOK, Tr("tooltip.settings.ok", L"Сохранить настройки и закрыть окно"));
-}
-
-static void SetupAddStationDialogTooltips(HWND hDlg, HWND hOk, HWND hCancel)
-{
-    HWND hTooltip = CreateTooltipWindow(hDlg);
-    AddTooltip(hTooltip, hDlg, hOk, Tr("tooltip.add.ok", L"Добавить станцию в список"));
-    AddTooltip(hTooltip, hDlg, hCancel, Tr("tooltip.add.cancel", L"Закрыть окно без добавления станции"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_MP3), Tr("tooltip.recording.mp3", L"Записывать поток в MP3 320 kbit/sec"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_FLAC), Tr("tooltip.recording.flac", L"Записывать поток в FLAC без потерь"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_STEREO_WIDTH), Tr("tooltip.effect.stereo_width", L"Включить расширение стереобазы"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_EXCITER), Tr("tooltip.effect.exciter", L"Добавить яркость и выразительность верхним частотам"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_DEEP_BASS), Tr("tooltip.effect.deep_bass", L"Усилить глубину низких частот"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME), Tr("tooltip.effect.dynamic_auto_volume", L"Автоматически выравнивать громкость воспроизведения"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER), Tr("tooltip.effect.lufs_gain_normalizer", L"Медленно приводить уровень разных станций к эталону -8.10 LUFS"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER), Tr("tooltip.effect.gain_rider", L"Контролировать пики и удерживать комфортный уровень сигнала"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY), Tr("tooltip.program.minimize_to_tray", L"При нажатии кнопки свернуть прятать программу в трей"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_SHOW_TRACK_TOAST), Tr("tooltip.program.show_track_toast", L"Когда программа в трее, показывать обложку при смене трека"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDOK), Tr("tooltip.settings.ok", L"Сохранить настройки и закрыть окно"));
 }
 
 static std::wstring TranslateFfmpegStatusLine(const std::string& line)
@@ -1342,17 +1397,6 @@ void PlayAtIndex(int index, bool resetReconnect) {
    
 }
 
-static void PlayPreviousStation()
-{
-    if (g_previousStationIndex < 0 ||
-        g_previousStationIndex >= static_cast<int>(playlist.size()) ||
-        g_previousStationIndex == g_currentlyPlayingIndex) {
-        return;
-    }
-
-    PlayAtIndex(g_previousStationIndex);
-}
-
 static LRESULT CALLBACK SettingStaticSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
     UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
@@ -1540,13 +1584,6 @@ static void PaintRoundedRect(HDC hdc, const RECT& rc, int radius, COLORREF fill,
     DeleteObject(hBrush);
 }
 
-static COLORREF GetSliderAccentColor(UINT id)
-{
-    UNREFERENCED_PARAMETER(id);
-    //return RGB(78, 143, 224); //темнее
-    return RGB(120, 205, 240);
-}
-
 static void DrawStyledSliderChannel(LPNMCUSTOMDRAW lpcd)
 {
     HWND hTrackBar = lpcd->hdr.hwndFrom;
@@ -1587,7 +1624,7 @@ static void DrawStyledSliderChannel(LPNMCUSTOMDRAW lpcd)
     }
 
     const int trackWidth = trackRect.right - trackRect.left;
-    const COLORREF accent = GetSliderAccentColor((UINT)lpcd->hdr.idFrom);
+    const COLORREF accent = RGB(120, 205, 240);
 
     if (minVal < 0 && maxVal > 0) {
         int zeroX = trackRect.left + MulDiv(0 - minVal, trackWidth, maxVal - minVal);
@@ -1674,7 +1711,6 @@ static void RestoreMainWindow(HWND hWnd)
     if (!hWnd) {
         return;
     }
-
     g_restoringFromTray = true;
     if (g_isInTray) {
         RemoveTrayIcon(hWnd);
@@ -1683,7 +1719,6 @@ static void RestoreMainWindow(HWND hWnd)
     if (g_hTrackToast) {
         ShowWindow(g_hTrackToast, SW_HIDE);
     }
-
     ShowWindow(hWnd, SW_RESTORE);
     ShowWindow(hWnd, SW_SHOWNORMAL);
     SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0,
@@ -1693,6 +1728,7 @@ static void RestoreMainWindow(HWND hWnd)
     BringWindowToTop(hWnd);
     SetActiveWindow(hWnd);
     SetForegroundWindow(hWnd);
+
     g_restoringFromTray = false;
 }
 
@@ -1701,9 +1737,7 @@ static void RestoreMainWindowFromTaskbar(HWND hWnd)
     if (!hWnd) {
         return;
     }
-
     g_minimizeToTrayFromCaptionButton = false;
-
     if (g_isInTray) {
         RestoreMainWindow(hWnd);
         return;
@@ -1717,11 +1751,21 @@ static void RestoreMainWindowFromTaskbar(HWND hWnd)
 
 static void HideMainWindowToTray(HWND hWnd)
 {
+    if(!hWnd) {
+        return;
+    }
+
+    if (IsWindow(hWnd)) {
+        SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    }
+
     if (!g_trayIconAdded) {
         AddTrayIcon(hWnd);
     }
 
     ShowWindow(hWnd, SW_HIDE);
+
     g_isInTray = true;
 
     if (!g_trayHideBalloonShown) {
@@ -1821,7 +1865,7 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
     case WM_INITDIALOG:
     {
         HWND hTooltip = CreateTooltipWindow(hDlg);
-        AddDlgItemTooltip(hTooltip, hDlg, IDOK, Tr("tooltip.about.ok", L"Закрыть окно информации о программе"));
+        AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDOK), Tr("tooltip.about.ok", L"Закрыть окно информации о программе"));
         return (INT_PTR)TRUE;
     }
 
@@ -1857,11 +1901,6 @@ static std::wstring GetWindowTextString(HWND hWnd)
     GetWindowTextW(hWnd, &text[0], len + 1);
     text.resize(static_cast<size_t>(len));
     return text;
-}
-
-static bool HasLineBreaks(const std::wstring& text)
-{
-    return text.find_first_of(L"\r\n") != std::wstring::npos;
 }
 
 static bool IsSupportedPlaylistUrlW(const std::wstring& url)
@@ -1914,7 +1953,8 @@ static bool ValidateNewStationInput(HWND hDlg, HWND hNameEdit, HWND hUrlEdit, Pl
         SetFocus(hNameEdit);
         return false;
     }
-    if (HasLineBreaks(name) || HasLineBreaks(url)) {
+    if (name.find_first_of(L"\r\n") != std::wstring::npos ||
+        url.find_first_of(L"\r\n") != std::wstring::npos) {
         MessageBoxW(hDlg, Tr("add.msg.one_line", L"Название и URL должны быть записаны в одну строку."), Tr("add.title", L"Добавить станцию"), MB_OK | MB_ICONWARNING);
         return false;
     }
@@ -1956,21 +1996,6 @@ struct AddStationDialogState {
 
 static constexpr int kAddStationDialogFontPt = 10;
 
-static HFONT CreateAddStationDialogFont(HWND hWnd, int pointSize)
-{
-    HDC hdc = GetDC(hWnd);
-    const int dpiY = hdc ? GetDeviceCaps(hdc, LOGPIXELSY) : 96;
-    if (hdc) {
-        ReleaseDC(hWnd, hdc);
-    }
-
-    const int fontHeight = -MulDiv(pointSize, dpiY, 72);
-    return CreateFontW(fontHeight, 0, 0, 0, FW_NORMAL,
-        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-}
-
 static LRESULT CALLBACK AddStationDialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     auto* state = reinterpret_cast<AddStationDialogState*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
@@ -1982,7 +2007,16 @@ static LRESULT CALLBACK AddStationDialogProc(HWND hWnd, UINT msg, WPARAM wParam,
         state = reinterpret_cast<AddStationDialogState*>(cs->lpCreateParams);
         SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
 
-        state->hFont = CreateAddStationDialogFont(hWnd, state->fontPointSize);
+        HDC fontDc = GetDC(hWnd);
+        const int dpiY = fontDc ? GetDeviceCaps(fontDc, LOGPIXELSY) : 96;
+        if (fontDc) {
+            ReleaseDC(hWnd, fontDc);
+        }
+        const int fontHeight = -MulDiv(state->fontPointSize, dpiY, 72);
+        state->hFont = CreateFontW(fontHeight, 0, 0, 0, FW_NORMAL,
+            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HFONT hFont = state->hFont ? state->hFont : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
         HWND hLabelName = CreateWindowExW(0, L"STATIC", Tr("add.name_label", L"Название станции:"),
@@ -2008,7 +2042,9 @@ static LRESULT CALLBACK AddStationDialogProc(HWND hWnd, UINT msg, WPARAM wParam,
         for (HWND hCtl : controls) {
             if (hCtl) SendMessageW(hCtl, WM_SETFONT, (WPARAM)hFont, TRUE);
         }
-        SetupAddStationDialogTooltips(hWnd, hOk, hCancel);
+        HWND hTooltip = CreateTooltipWindow(hWnd);
+        AddTooltip(hTooltip, hWnd, hOk, Tr("tooltip.add.ok", L"Добавить станцию в список"));
+        AddTooltip(hTooltip, hWnd, hCancel, Tr("tooltip.add.cancel", L"Закрыть окно без добавления станции"));
 
         SendMessageW(state->hNameEdit, EM_LIMITTEXT, 256, 0);
         SendMessageW(state->hUrlEdit, EM_LIMITTEXT, 2048, 0);
@@ -2127,6 +2163,202 @@ static bool ShowAddStationDialog(HWND hOwner, PlaylistItem& item)
     return false;
 }
 
+struct EditStationNameDialogState {
+    bool accepted = false;
+    bool done = false;
+    std::wstring name;
+    HWND hNameEdit = nullptr;
+    HFONT hFont = nullptr;
+    int fontPointSize = 10;
+};
+
+static bool ValidateStationNameInput(HWND hDlg, HWND hNameEdit, std::wstring& outName)
+{
+    std::wstring name = TrimWide(GetWindowTextString(hNameEdit));
+    if (name.empty()) {
+        MessageBoxW(hDlg, Tr("edit_station.msg.enter_name", L"Введите название станции."), Tr("edit_station.title", L"Изменить название станции"), MB_OK | MB_ICONWARNING);
+        SetFocus(hNameEdit);
+        return false;
+    }
+    if (name.find_first_of(L"\r\n") != std::wstring::npos) {
+        MessageBoxW(hDlg, Tr("edit_station.msg.one_line", L"Название станции должно быть записано в одну строку."), Tr("edit_station.title", L"Изменить название станции"), MB_OK | MB_ICONWARNING);
+        SetFocus(hNameEdit);
+        return false;
+    }
+    if (name.size() > 128) {
+        MessageBoxW(hDlg, Tr("edit_station.msg.too_long", L"Название станции не должно быть длиннее 128 символов."), Tr("edit_station.title", L"Изменить название станции"), MB_OK | MB_ICONWARNING);
+        SetFocus(hNameEdit);
+        return false;
+    }
+
+    outName = std::move(name);
+    return true;
+}
+
+static LRESULT CALLBACK EditStationNameDialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    auto* state = reinterpret_cast<EditStationNameDialogState*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+
+    switch (msg) {
+    case WM_CREATE:
+    {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        state = reinterpret_cast<EditStationNameDialogState*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+
+        HDC fontDc = GetDC(hWnd);
+        const int dpiY = fontDc ? GetDeviceCaps(fontDc, LOGPIXELSY) : 96;
+        if (fontDc) {
+            ReleaseDC(hWnd, fontDc);
+        }
+        const int fontHeight = -MulDiv(state->fontPointSize, dpiY, 72);
+        state->hFont = CreateFontW(fontHeight, 0, 0, 0, FW_NORMAL,
+            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT hFont = state->hFont ? state->hFont : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+
+        HWND hLabelName = CreateWindowExW(0, L"STATIC", Tr("add.name_label", L"Название станции:"),
+            WS_CHILD | WS_VISIBLE, 16, 22, 128, 20, hWnd, nullptr, GetModuleHandle(NULL), nullptr);
+
+        state->hNameEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", state->name.c_str(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            150, 20, 292, 24, hWnd, (HMENU)IDC_EDIT_ADD_STATION_NAME, GetModuleHandle(NULL), nullptr);
+
+        HWND hOk = CreateWindowExW(0, L"BUTTON", Tr("common.ok", L"OK"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            262, 92, 82, 28, hWnd, (HMENU)IDOK, GetModuleHandle(NULL), nullptr);
+        HWND hCancel = CreateWindowExW(0, L"BUTTON", Tr("common.cancel", L"Отмена"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            360, 92, 82, 28, hWnd, (HMENU)IDCANCEL, GetModuleHandle(NULL), nullptr);
+
+        HWND controls[] = { hLabelName, state->hNameEdit, hOk, hCancel };
+        for (HWND hCtl : controls) {
+            if (hCtl) SendMessageW(hCtl, WM_SETFONT, (WPARAM)hFont, TRUE);
+        }
+        HWND hTooltip = CreateTooltipWindow(hWnd);
+        AddTooltip(hTooltip, hWnd, hOk, Tr("tooltip.add.ok", L"Добавить станцию в список"));
+        AddTooltip(hTooltip, hWnd, hCancel, Tr("tooltip.add.cancel", L"Закрыть окно без добавления станции"));
+
+        SendMessageW(state->hNameEdit, EM_LIMITTEXT, 128, 0);
+        SendMessageW(state->hNameEdit, EM_SETSEL, 0, -1);
+        SetFocus(state->hNameEdit);
+        return 0;
+    }
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDOK:
+            if (state && ValidateStationNameInput(hWnd, state->hNameEdit, state->name)) {
+                state->accepted = true;
+                state->done = true;
+                ShowWindow(hWnd, SW_HIDE);
+            }
+            return 0;
+        case IDCANCEL:
+            if (state) {
+                state->done = true;
+            }
+            ShowWindow(hWnd, SW_HIDE);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        if (state) {
+            state->done = true;
+        }
+        ShowWindow(hWnd, SW_HIDE);
+        return 0;
+    case WM_DESTROY:
+        if (state && state->hFont) {
+            DeleteObject(state->hFont);
+            state->hFont = nullptr;
+        }
+        return 0;
+    }
+
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+static bool ShowEditStationNameDialog(HWND hOwner, std::wstring& name)
+{
+    const wchar_t kClassName[] = L"IRPFFmpegEditStationNameDialog";
+    static bool registered = false;
+
+    HINSTANCE hInst = GetModuleHandle(NULL);
+    if (!registered) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = EditStationNameDialogProc;
+        wc.hInstance = hInst;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = kClassName;
+        if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            MessageBoxW(hOwner, Tr("edit_station.msg.create_failed", L"Не удалось создать форму изменения станции."), Tr("edit_station.title", L"Изменить название станции"), MB_OK | MB_ICONERROR);
+            return false;
+        }
+        registered = true;
+    }
+
+    RECT ownerRc = {};
+    GetWindowRect(hOwner, &ownerRc);
+    const int width = 480;
+    const int height = 165;
+    const int x = ownerRc.left + ((ownerRc.right - ownerRc.left) - width) / 2;
+    const int y = ownerRc.top + ((ownerRc.bottom - ownerRc.top) - height) / 2;
+
+    EditStationNameDialogState state;
+    state.fontPointSize = kAddStationDialogFontPt;
+    state.name = name;
+
+    HWND hDlg = CreateWindowExW(
+        WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        kClassName,
+        Tr("edit_station.title", L"Изменить название станции"),
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        x, y, width, height,
+        hOwner,
+        nullptr,
+        hInst,
+        &state);
+
+    if (!hDlg) {
+        MessageBoxW(hOwner, Tr("edit_station.msg.open_failed", L"Не удалось открыть форму изменения станции."), Tr("edit_station.title", L"Изменить название станции"), MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    EnableWindow(hOwner, FALSE);
+    ShowWindow(hDlg, SW_SHOW);
+    UpdateWindow(hDlg);
+
+    MSG msg = {};
+    while (!state.done && IsWindow(hDlg)) {
+        BOOL result = GetMessageW(&msg, nullptr, 0, 0);
+        if (result <= 0) {
+            if (result == 0) {
+                PostQuitMessage((int)msg.wParam);
+            }
+            break;
+        }
+
+        if (!IsDialogMessageW(hDlg, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    EnableWindow(hOwner, TRUE);
+    SetActiveWindow(hOwner);
+    if (IsWindow(hDlg)) {
+        DestroyWindow(hDlg);
+    }
+
+    if (state.accepted) {
+        name = std::move(state.name);
+        return true;
+    }
+    return false;
+}
+
 static bool AddStationToPlaylist(HWND hDlg)
 {
     PlaylistItem item;
@@ -2152,7 +2384,8 @@ static bool AddStationToPlaylist(HWND hDlg)
     LVITEMW lvi = {};
     lvi.mask = LVIF_TEXT;
     lvi.iItem = index;
-    lvi.pszText = const_cast<LPWSTR>(playlist[index].name.c_str());
+    std::wstring displayName = GetPlaylistDisplayName(index);
+    lvi.pszText = const_cast<LPWSTR>(displayName.c_str());
     ListView_InsertItem(hListView, &lvi);
     ListView_SetItemText(hListView, index, 1, const_cast<LPWSTR>(playlist[index].url.c_str()));
 
@@ -2240,6 +2473,83 @@ static bool DeleteStationFromPlaylist(HWND hDlg, int index)
     return true;
 }
 
+static bool SaveStationFromPlaylist(HWND hDlg, int index)
+{
+    if (index < 0 || index >= static_cast<int>(playlist.size())) {
+        return false;
+    }
+
+    std::wstring stationName = GetPlaylistDisplayName(index);
+    stationName = TrimWide(stationName);
+    if (stationName.empty()) {
+        return false;
+    }
+
+    PlaylistItem oldItem = playlist[index];
+    playlist[index].name = stationName;
+    playlist[index].name_icy.clear();
+    playlist[index].disable_name_icy = true;
+
+    if (!SavePlaylistToM3U(L"playlist.m3u", playlist)) {
+        playlist[index] = std::move(oldItem);
+        return false;
+    }
+
+    savePlaylistToDat(L"app.dat", playlist, g_currentlyPlayingIndex);
+
+    HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
+    if (hListView) {
+        std::wstring displayName = stationName;
+        if (index == g_currentlyPlayingIndex) {
+            displayName = L"▶ " + displayName;
+        }
+        ListView_SetItemText(hListView, index, 0, const_cast<LPWSTR>(displayName.c_str()));
+        ListView_SetItemText(hListView, index, 1, const_cast<LPWSTR>(playlist[index].url.c_str()));
+        SetStationNameColumnWidth(hListView);
+    }
+
+    InvalidateNowPlayingBar(hDlg);
+    return true;
+}
+
+static bool EditStationNameInPlaylist(HWND hDlg, int index)
+{
+    if (index < 0 || index >= static_cast<int>(playlist.size())) {
+        return false;
+    }
+
+    std::wstring stationName = GetPlaylistDisplayName(index);
+    if (!ShowEditStationNameDialog(hDlg, stationName)) {
+        return false;
+    }
+
+    PlaylistItem oldItem = playlist[index];
+    playlist[index].name = stationName;
+    playlist[index].name_icy.clear();
+    playlist[index].disable_name_icy = true;
+
+    if (!SavePlaylistToM3U(L"playlist.m3u", playlist)) {
+        playlist[index] = std::move(oldItem);
+        return false;
+    }
+
+    savePlaylistToDat(L"app.dat", playlist, g_currentlyPlayingIndex);
+
+    HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
+    if (hListView) {
+        std::wstring displayName = stationName;
+        if (index == g_currentlyPlayingIndex) {
+            displayName = L"▶ " + displayName;
+        }
+        ListView_SetItemText(hListView, index, 0, const_cast<LPWSTR>(displayName.c_str()));
+        ListView_SetItemText(hListView, index, 1, const_cast<LPWSTR>(playlist[index].url.c_str()));
+        SetStationNameColumnWidth(hListView);
+    }
+
+    InvalidateNowPlayingBar(hDlg);
+    return true;
+}
+
 static void FillListViewFromPlaylist(HWND hListView)
 {
     if (!hListView) return;
@@ -2255,7 +2565,8 @@ static void FillListViewFromPlaylist(HWND hListView)
 
     for (int i = 0; i < static_cast<int>(playlist.size()); ++i) {
         lvi.iItem = i;
-        lvi.pszText = const_cast<LPWSTR>(playlist[i].name.c_str());
+        std::wstring displayName = GetPlaylistDisplayName(i);
+        lvi.pszText = const_cast<LPWSTR>(displayName.c_str());
         ListView_InsertItem(hListView, &lvi);
         ListView_SetItemText(hListView, i, 1, const_cast<LPWSTR>(playlist[i].url.c_str()));
     }
@@ -2295,6 +2606,22 @@ static bool IsPlaylistOutdatedAgainstM3U(const std::vector<PlaylistItem>& curren
     }
 
     return false;
+}
+
+static void PreserveIcyNameDisableFlagsByUrl(const std::vector<PlaylistItem>& sourcePlaylist,
+    std::vector<PlaylistItem>& targetPlaylist)
+{
+    for (PlaylistItem& target : targetPlaylist) {
+        if (target.url.empty()) {
+            continue;
+        }
+        for (const PlaylistItem& source : sourcePlaylist) {
+            if (source.url == target.url) {
+                target.disable_name_icy = source.disable_name_icy;
+                break;
+            }
+        }
+    }
 }
 
 void StopPlaylistNameResolveThread()
@@ -2372,8 +2699,10 @@ static void ReloadPlaylistFromM3U()
     }
 
     // Перезагружаем плейлист
+    std::vector<PlaylistItem> previousPlaylist = playlist;
     std::vector<PlaylistItem> tmp;
     loadPlaylist(L"playlist.m3u", tmp);
+    PreserveIcyNameDisableFlagsByUrl(previousPlaylist, tmp);
     playlist = std::move(tmp);
 
     if (g_hMainWnd) {
@@ -2421,20 +2750,13 @@ static void ReloadPlaylistFromM3U()
     }
 }
 
-static int ClampStereoWidthPercent(int value)
-{
-    if (value < 0) return 0;
-    if (value > 100) return 100;
-    return value;
-}
-
 static void SyncStereoWidthPercentFromDialog(HWND hDlg, bool normalizeText)
 {
     BOOL translated = FALSE;
     UINT rawValue = GetDlgItemInt(hDlg, IDC_EDIT_STEREO_WIDTH, &translated, FALSE);
 
     if (translated) {
-        g_stereoWidthPercent = ClampStereoWidthPercent(static_cast<int>(rawValue));
+        g_stereoWidthPercent = (std::max)(0, (std::min)(100, static_cast<int>(rawValue)));
     }
 
     if (normalizeText) {
@@ -2495,12 +2817,13 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
         SendDlgItemMessageW(hDlg, IDC_CHECK_MP3, BM_SETCHECK, rec_is_flac ? BST_UNCHECKED : BST_CHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_STEREO_WIDTH, BM_SETCHECK, g_enableStereoWidth ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, BM_SETCHECK, g_enableDynamicAutoVolume ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendDlgItemMessageW(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER, BM_SETCHECK, g_enableLufsGainNormalizer ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_EXCITER, BM_SETCHECK, g_enableExciter ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_DEEP_BASS, BM_SETCHECK, g_enableDeepBass ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, BM_SETCHECK, g_enableLimiterGainRider ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, BM_SETCHECK, g_minimizeToTray ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, BM_SETCHECK, g_showTrackToastInTray ? BST_CHECKED : BST_UNCHECKED, 0);
-        SetDlgItemInt(hDlg, IDC_EDIT_STEREO_WIDTH, static_cast<UINT>(ClampStereoWidthPercent(g_stereoWidthPercent)), FALSE);
+        SetDlgItemInt(hDlg, IDC_EDIT_STEREO_WIDTH, static_cast<UINT>((std::max)(0, (std::min)(100, g_stereoWidthPercent))), FALSE);
 
         if (HWND hEditStereo = GetDlgItem(hDlg, IDC_EDIT_STEREO_WIDTH)) {
             // установка стиля ES_NUMBER
@@ -2570,6 +2893,18 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             {
                 g_enableDynamicAutoVolume =
                     (SendDlgItemMessageW(hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            }
+            return (INT_PTR)TRUE;
+
+        case IDC_CHECK_LUFS_GAIN_NORMALIZER:
+            if (notif == BN_CLICKED)
+            {
+                g_enableLufsGainNormalizer =
+                    (SendDlgItemMessageW(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                if (!g_enableLufsGainNormalizer) {
+                    g_lufsNormalizerStatus.clear();
+                    InvalidateNowPlayingBar(g_hMainWnd);
+                }
             }
             return (INT_PTR)TRUE;
 
@@ -2829,7 +3164,11 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
         if (IsPlaylistOutdatedAgainstM3U(playlist)) {
             // обновляем данные плейлиста
-            loadPlaylist(L"playlist.m3u", playlist);
+            std::vector<PlaylistItem> previousPlaylist = playlist;
+            std::vector<PlaylistItem> m3uPlaylist;
+            loadPlaylist(L"playlist.m3u", m3uPlaylist);
+            PreserveIcyNameDisableFlagsByUrl(previousPlaylist, m3uPlaylist);
+            playlist = std::move(m3uPlaylist);
             selectedIndex = -1;
         }
 
@@ -2880,7 +3219,8 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         for (int i = 0; i < playlist.size(); ++i)
         {
             lvi.iItem = i;
-            lvi.pszText = (LPWSTR)playlist[i].name.c_str();
+            std::wstring displayName = GetPlaylistDisplayName(i);
+            lvi.pszText = (LPWSTR)displayName.c_str();
             ListView_InsertItem(hListView, &lvi);
             ListView_SetItemText(hListView, i, 1, (LPWSTR)playlist[i].url.c_str());
             ListView_SetColumnWidth(hListView, 1, LVSCW_AUTOSIZE);
@@ -2935,6 +3275,40 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
         return (INT_PTR)TRUE;
     }
+    case WM_ACTIVATE:
+    {
+        WORD activationState = LOWORD(wParam);
+        if (activationState == WA_INACTIVE) {
+            HWND hFocus = GetFocus();
+            if (hFocus && IsChild(hDlg, hFocus)) {
+                const int controlId = GetDlgCtrlID(hFocus);
+                switch (controlId) {
+                case IDC_BUTTON_PP:
+                case IDC_BUTTON_REV:
+                case IDC_BUTTON_FORV:
+                case IDC_BUTTON_PREVIOUS_STATION:
+                case IDC_BUTTON_REC:
+                    SetFocus(hDlg);
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
+        else if (HIWORD(wParam) == 0 && !g_isInTray && !g_minimizeToTrayFromCaptionButton) {
+            ForceForegroundWindow(hDlg);
+            PostMessageW(hDlg, WM_APP_ENSURE_FOREGROUND, 0, 0);
+        }
+        break;
+    }
+
+    case WM_MOUSEACTIVATE:
+        if (LOWORD(lParam) == HTMINBUTTON) {
+            g_minimizeToTrayFromCaptionButton = true;
+            return MA_ACTIVATE;
+        }
+        break;
+
     case WM_NCLBUTTONDOWN:
         if (wParam == HTMINBUTTON) {
             g_minimizeToTrayFromCaptionButton = true;
@@ -2961,6 +3335,12 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         break;
 
     case WM_SIZE:
+        if (wParam == SIZE_MINIMIZED) {
+            if (IsWindow(hDlg)) {
+                SetWindowPos(hDlg, HWND_NOTOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            }
+        }
         g_minimizeToTrayFromCaptionButton = false;
         break;
     case WM_LBUTTONDOWN:
@@ -3027,6 +3407,14 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
         break;
     }
+    case WM_APP_ENSURE_FOREGROUND:
+        if (IsWindow(hDlg)) {
+            ForceForegroundWindow(hDlg);
+            SetWindowPos(hDlg, HWND_NOTOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        }
+        return (INT_PTR)TRUE;
+
     case WM_APP_SET_VOLUME_SLIDER:
         SendMessage(g_hSliderVolume, TBM_SETPOS, TRUE, (LPARAM)wParam);
         InvalidateRect(g_hSliderVolume, nullptr, TRUE);
@@ -3058,7 +3446,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
-        std::wstring displayName = payload->name;
+        std::wstring displayName = GetPlaylistDisplayName(payload->index);
         if (payload->index == g_currentlyPlayingIndex) {
             wchar_t currentText[256] = { 0 };
             ListView_GetItemText(hListView, payload->index, 0, currentText, _countof(currentText));
@@ -3068,8 +3456,57 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
 
         ListView_SetItemText(hListView, payload->index, 0, const_cast<LPWSTR>(displayName.c_str()));
-		// После обновления текста подстроим ширину колонки
+        // После обновления текста подстроим ширину колонки
         SetStationNameColumnWidth(hListView);
+        return 0;
+    }
+    case WM_APP_STATION_NAME_FROM_ICY:
+    {
+        std::unique_ptr<StationNameFromIcyPayload> payload(reinterpret_cast<StationNameFromIcyPayload*>(lParam));
+        if (!payload) {
+            return 0;
+        }
+        if (!g_enableIcyStationNameUpdates) {
+            return 0;
+        }
+        if (payload->generation != g_playbackGeneration.load()) {
+            return 0;
+        }
+        const int index = g_currentlyPlayingIndex;
+        if (index < 0 || index >= static_cast<int>(playlist.size())) {
+            return 0;
+        }
+        if (playlist[index].disable_name_icy) {
+            playlist[index].name_icy.clear();
+            return 0;
+        }
+        std::wstring stationName = TrimWide(payload->name);
+        if (stationName.empty()) {
+            return 0;
+        }
+        if (stationName.size() > 128) {
+            stationName.resize(128);
+            stationName = TrimWide(stationName);
+        }
+        if (stationName.empty()) {
+            return 0;
+        }
+
+        if (playlist[index].name_icy == stationName) {
+            return 0;
+        }
+
+        playlist[index].name_icy = stationName;
+
+        HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
+        if (!hListView) {
+            return 0;
+        }
+
+        std::wstring displayName = L"▶ " + stationName;
+        ListView_SetItemText(hListView, index, 0, const_cast<LPWSTR>(displayName.c_str()));
+        SetStationNameColumnWidth(hListView);
+        InvalidateNowPlayingBar(hDlg);
         return 0;
     }
     case WM_APP_METADATA_UPDATED:
@@ -3101,6 +3538,16 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        if (text->empty()) {
+            g_nowPlayingStreamInfo.clear();
+            InvalidateNowPlayingBar(hDlg);
+            return 0;
+        }
+
+        if (!g_audioStreamInfoAllowed.load()) {
+            return 0;
+        }
+
         g_nowPlayingStreamInfo = *text;
         InvalidateNowPlayingBar(hDlg);
         return 0;
@@ -3113,6 +3560,17 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
 
         g_limiterRiderStatus = *text;
+        InvalidateNowPlayingBar(hDlg);
+        return 0;
+    }
+    case WM_APP_LUFS_NORMALIZER_STATUS:
+    {
+        std::unique_ptr<std::wstring> text(reinterpret_cast<std::wstring*>(lParam));
+        if (!text) {
+            return 0;
+        }
+
+        g_lufsNormalizerStatus = *text;
         InvalidateNowPlayingBar(hDlg);
         return 0;
     }
@@ -3234,6 +3692,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                         UpdateWindow(hRec);
                     }
                 }
+
                 StopPlayback();
             }
             else {
@@ -3244,6 +3703,8 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                 else {
                     PlayAtIndex(0);
                 }
+
+				SetFocus(GetDlgItem(hDlg, IDC_LIST_URL));
                 
             }
             return (INT_PTR)TRUE;
@@ -3275,7 +3736,11 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
         case IDC_BUTTON_PREVIOUS_STATION:
         {
-            PlayPreviousStation();
+            if (g_previousStationIndex >= 0 &&
+                g_previousStationIndex < static_cast<int>(playlist.size()) &&
+                g_previousStationIndex != g_currentlyPlayingIndex) {
+                PlayAtIndex(g_previousStationIndex);
+            }
             return (INT_PTR)TRUE;
         }
         case IDC_BUTTON_RELOAD_M3U:
@@ -3286,6 +3751,26 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         case ID_LIST_URL_ADD_STATION:
         {
             AddStationToPlaylist(hDlg);
+            return (INT_PTR)TRUE;
+        }
+        case ID_LIST_URL_SAVE_STATION:
+        {
+            HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
+            int index = hListView ? ListView_GetSelectionMark(hListView) : -1;
+            if (hListView && index < 0) {
+                index = ListView_GetNextItem(hListView, -1, LVNI_SELECTED);
+            }
+            SaveStationFromPlaylist(hDlg, index);
+            return (INT_PTR)TRUE;
+        }
+        case ID_LIST_URL_EDIT_STATION:
+        {
+            HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
+            int index = hListView ? ListView_GetSelectionMark(hListView) : -1;
+            if (hListView && index < 0) {
+                index = ListView_GetNextItem(hListView, -1, LVNI_SELECTED);
+            }
+            EditStationNameInPlaylist(hDlg, index);
             return (INT_PTR)TRUE;
         }
         case ID_LIST_URL_DELETE_STATION:
@@ -3388,7 +3873,19 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                 SetMenuItemBitmapByCommand(hPopup, ID_LIST_URL_ADD_STATION, hAddIcon);
 
                 HBITMAP hDeleteIcon = nullptr;
+                HBITMAP hSaveIcon = nullptr;
+                HBITMAP hEditIcon = nullptr;
                 if (itemIndex >= 0) {
+                    AppendMenuW(hPopup, MF_SEPARATOR, 0, nullptr);
+                    AppendMenuW(hPopup, MF_STRING, ID_LIST_URL_EDIT_STATION, Tr("context.edit_station", L"Изменить название станции"));
+                    hEditIcon = CreateMenuGlyphBitmap(hDlg, L"\uE70F");
+                    SetMenuItemBitmapByCommand(hPopup, ID_LIST_URL_EDIT_STATION, hEditIcon);
+
+                    AppendMenuW(hPopup, MF_SEPARATOR, 0, nullptr);
+                    AppendMenuW(hPopup, MF_STRING, ID_LIST_URL_SAVE_STATION, Tr("context.save_station", L"Сохранить радиостанцию"));
+                    hSaveIcon = CreateMenuGlyphBitmap(hDlg, L"\uE74E");
+                    SetMenuItemBitmapByCommand(hPopup, ID_LIST_URL_SAVE_STATION, hSaveIcon);
+
                     AppendMenuW(hPopup, MF_SEPARATOR, 0, nullptr);
                     AppendMenuW(hPopup, MF_STRING, ID_LIST_URL_DELETE_STATION, Tr("context.delete_station", L"Удалить станцию"));
                     hDeleteIcon = CreateMenuGlyphBitmap(hDlg, L"\uE74D");
@@ -3399,6 +3896,8 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
                 if (hReloadIcon) DeleteObject(hReloadIcon);
                 if (hAddIcon) DeleteObject(hAddIcon);
+                if (hEditIcon) DeleteObject(hEditIcon);
+                if (hSaveIcon) DeleteObject(hSaveIcon);
                 if (hDeleteIcon) DeleteObject(hDeleteIcon);
             }
 
@@ -3891,7 +4390,16 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             }
         }
         //перезагрузка
-        int current_trying = (int)lParam;
+        int current_trying = 0;
+        if ((int)lParam > 0) {
+            if (reconnect_attempts < MAX_RECONNECT_ATTEMPTS) {
+                current_trying = ++reconnect_attempts;
+            }
+            else {
+                current_trying = 0;
+            }
+        }
+
         StopPlayback(current_trying <= 0);
         //LogToUI("Playback error occurred. Attempting to reconnect... Try #" + std::to_string(current_trying));
         if (current_trying > 0) {
@@ -3926,6 +4434,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         if (total_sec <= 0) {
             g_nowPlayingElapsed.clear();
             g_limiterRiderStatus.clear();
+            g_lufsNormalizerStatus.clear();
             if (!running.load()) {
                 g_nowPlayingStreamInfo.clear();
             }
@@ -3946,6 +4455,8 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             g_nowPlayingElapsed = time_buf;
             if (running.load() &&
                 !g_suppressFfmpegDecoderLog.load() &&
+                g_audioStreamInfoAllowed.load() &&
+                !g_nowPlayingStreamInfo.empty() &&
                 IsTransientPlaybackStatus(g_nowPlayingStatus)) {
                 g_nowPlayingStatus.clear();
             }
@@ -3994,21 +4505,14 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         std::vector<PlaylistItem> currentPlaylist;
         currentPlaylist.reserve(itemCount);
 
-        wchar_t nameBuffer[256];
-        wchar_t urlBuffer[512];
-
         for (int i = 0; i < itemCount; ++i) {
-            ListView_GetItemText(hListView, i, 0, nameBuffer, _countof(nameBuffer));
-            ListView_GetItemText(hListView, i, 1, urlBuffer, _countof(urlBuffer));
-
-            // The play indicator might be present, remove it before saving
-            std::wstring nameStr(nameBuffer);
-            const std::wstring playIcon = L"▶ ";
-            if (nameStr.rfind(playIcon, 0) == 0) {
-                nameStr = nameStr.substr(playIcon.length());
+            if (i < static_cast<int>(playlist.size())) {
+                PlaylistItem item;
+                item.name = playlist[i].name;
+                item.url = playlist[i].url;
+                item.disable_name_icy = playlist[i].disable_name_icy;
+                currentPlaylist.push_back(item);
             }
-
-            currentPlaylist.push_back({ nameStr, std::wstring(urlBuffer) });
         }
 
         savePlaylistToDat(L"app.dat", currentPlaylist, g_currentlyPlayingIndex);
@@ -4075,6 +4579,7 @@ void PlaybackControlFunction(std::string url) {
         g_lastFfmpegStatusRaw.clear();
         g_lastFfmpegLogRaw.clear();
     }
+    g_audioStreamInfoAllowed.store(false);
 
     if (url.empty()) {
         return; // мало ли?
@@ -4166,12 +4671,7 @@ void PlaybackControlFunction(std::string url) {
             av_dict_free(&options);
 
             if (reconnect_attempts < MAX_RECONNECT_ATTEMPTS) {
-                const int nextAttempt = ++reconnect_attempts;
-                std::wstring str_status =
-                    TrString("status.retry_after_timeout_prefix", L"Попытка ") +
-                    std::to_wstring(nextAttempt) +
-                    TrString("status.retry_after_timeout_suffix", L" после таймаута.");
-                PostFfmpegStatus(str_status);
+                PostFfmpegStatus(TrString("status.ffmpeg_timeout", L"FFmpeg: таймаут сети / ожидание переподключения"));
 
                 for (int i = 0; i < 50 && !g_quit_flag.load(); ++i) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -4179,7 +4679,7 @@ void PlaybackControlFunction(std::string url) {
                 if (g_quit_flag.load() || playbackGeneration != g_playbackGeneration.load()) {
                     return;
                 }
-                PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, nextAttempt);
+                PostMessage(g_hMainWnd, WM_APP_PLAYBACK_ERROR, (WPARAM)playbackGeneration, 1);
             }
             else {
                 reconnect_attempts = 0;
@@ -4329,8 +4829,6 @@ void PlaybackControlFunction(std::string url) {
         av_channel_layout_uninit(&filter_layout);
 
         audioClient->Start();
-
-        PostFfmpegStatus(L"\u25B7 00:00");
 
         StartMetadataTimer();
         update_stream_metadata();
