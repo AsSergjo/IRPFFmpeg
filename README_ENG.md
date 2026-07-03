@@ -41,14 +41,18 @@ It is better not to run `IRPFFmpeg.exe` directly: the main application needs lib
 
 Recommended download flow from GitHub Releases:
 
-1. Download `IRPFFmpeg-v1.0.1-support-win-x64.zip` from the `v1.0.1` release if you do not already have a working folder with DLLs and support files.
-2. Extract it to a separate folder.
-3. Download the current `IRPFFmpeg.exe` from the latest release, for example `v1.0.3`, and place it next to `Start_IRPFFmpeg.exe`.
+1. Download the DLL support archive `IRPFFmpeg-support-win-x64.zip` once if you do not already have a `heap_dll` folder with third-party DLLs.
+2. Download the project archive for the current version, for example `IRPFFmpeg-v1.0.3-project-win-x64.zip`.
+3. Extract both archives into the same folder.
 4. Run `Start_IRPFFmpeg.exe`.
 
-The support archive contains libraries, the launcher, playlist, settings and language files. For small fixes, it is usually enough to replace only `IRPFFmpeg.exe`.
+`IRPFFmpeg-support-win-x64.zip` contains only third-party runtime DLLs inside `heap_dll` and is not tied to the application version. It only needs to change when the third-party DLL set changes.
 
-Minimal working folder layout after extracting the support archive and adding `IRPFFmpeg.exe`:
+Versioned project archives contain only IRPFFmpeg project files: `IRPFFmpeg.exe`, `Start_IRPFFmpeg.exe`, language files, documentation and project support files. Starting with later releases, for example `v1.0.4`, new versions are published without third-party DLLs; extract the new project archive over a working folder that already has `heap_dll`.
+
+For small fixes that only change the main application, replacing the standalone `IRPFFmpeg.exe` is usually enough.
+
+Minimal working folder layout after extracting the DLL support archive and the project archive:
 
 ```text
 Start_IRPFFmpeg.exe
@@ -66,14 +70,14 @@ heap_dll/
   swscale-9.dll
   turbojpeg.dll
   zlib1.dll
-playlist.m3u
-app.dat
 Language/
   english.lng
   russian.lng
+LICENSE
+THIRD_PARTY_NOTICES.md
 ```
 
-If you already have a working folder with `heap_dll`, `Language`, `playlist.m3u` and `app.dat`, updating usually means downloading the new standalone `IRPFFmpeg.exe` and replacing the old file.
+If you already have a working folder with `heap_dll`, updating usually means downloading the new project archive or the standalone `IRPFFmpeg.exe`. If a release changes `Start_IRPFFmpeg.exe`, `Language/*.lng`, documentation or project support files, use the project archive instead of only the exe.
 
 If you assemble the package manually, use x64 DLLs only and do not mix files from different builds.
 
