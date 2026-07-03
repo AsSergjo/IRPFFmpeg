@@ -94,7 +94,7 @@ std::atomic<float> current_eq_gain(10.0f);
 std::atomic<float> current_eq_gain_bass(2.0f);
 std::atomic<unsigned long> g_playbackGeneration(0);
 bool g_enableStereoWidth = true;
-bool g_enableDynamicAutoVolume = false;
+bool g_enableSpeechIntelligibilityCompressor = false;
 bool g_enableLufsGainNormalizer = false;
 bool g_enableExciter = false;
 bool g_enableDeepBass = false;
@@ -307,6 +307,18 @@ static void ForceForegroundWindow(HWND hWnd)
     if (attached) {
         AttachThreadInput(foregroundThreadId, currentThreadId, FALSE);
     }
+}
+
+static bool ShouldEnsureForeground(HWND hWnd)
+{
+    return hWnd &&
+        IsWindow(hWnd) &&
+        !g_isInTray &&
+        !g_isReallyExiting &&
+        !g_restoringFromTray &&
+        !g_minimizeToTrayFromCaptionButton &&
+        !IsIconic(hWnd) &&
+        IsWindowVisible(hWnd);
 }
 
 static std::wstring GetPlaylistDisplayName(int index)
@@ -1156,7 +1168,7 @@ static void ApplySettingsDialogLanguage(HWND hDlg)
     SetDlgItemTextW(hDlg, IDC_CHECK_STEREO_WIDTH, Tr("settings.effect.stereo_width", L" Расширение Стерео"));
     SetDlgItemTextW(hDlg, IDC_CHECK_EXCITER, Tr("settings.effect.exciter", L" Exciter / Яркость"));
     SetDlgItemTextW(hDlg, IDC_CHECK_DEEP_BASS, Tr("settings.effect.deep_bass", L" DeepBass / Глубокий Бас"));
-    SetDlgItemTextW(hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, Tr("settings.effect.dynamic_auto_volume", L" Динамическая Регулировка Усиления"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_SPEECH_INTELLIGIBILITY_COMPRESSOR, Tr("settings.effect.speech_intelligibility_compressor", L" Компрессор разборчивости речи"));
     SetDlgItemTextW(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER, Tr("settings.effect.lufs_gain_normalizer", L" LUFS-нормализация станций"));
     SetDlgItemTextW(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, Tr("settings.effect.gain_rider", L" GainRider / Контроль Пиков"));
     SetDlgItemTextW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, Tr("settings.program.minimize_to_tray", L" При минимизации отправлять в трей"));
@@ -1197,8 +1209,8 @@ static void SetupSettingsDialogTooltips(HWND hDlg)
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_STEREO_WIDTH), Tr("tooltip.effect.stereo_width", L"Включить расширение стереобазы"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_EXCITER), Tr("tooltip.effect.exciter", L"Добавить яркость и выразительность верхним частотам"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_DEEP_BASS), Tr("tooltip.effect.deep_bass", L"Усилить глубину низких частот"));
-    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME), Tr("tooltip.effect.dynamic_auto_volume", L"Автоматически выравнивать громкость воспроизведения"));
-    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER), Tr("tooltip.effect.lufs_gain_normalizer", L"Медленно приводить уровень разных станций к эталону -8.10 LUFS"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_SPEECH_INTELLIGIBILITY_COMPRESSOR), Tr("tooltip.effect.speech_intelligibility_compressor", L"Поднимать тихие фразы и мягко сжимать громкие для лучшей разборчивости речи"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER), Tr("tooltip.effect.lufs_gain_normalizer", L"Медленно приводить уровень разных станций к эталону -9.00 LUFS"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER), Tr("tooltip.effect.gain_rider", L"Контролировать пики и удерживать комфортный уровень сигнала"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY), Tr("tooltip.program.minimize_to_tray", L"При нажатии кнопки свернуть прятать программу в трей"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_SHOW_TRACK_TOAST), Tr("tooltip.program.show_track_toast", L"Когда программа в трее, показывать обложку при смене трека"));
@@ -2816,7 +2828,7 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
         SendDlgItemMessageW(hDlg, IDC_CHECK_FLAC, BM_SETCHECK, rec_is_flac ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_MP3, BM_SETCHECK, rec_is_flac ? BST_UNCHECKED : BST_CHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_STEREO_WIDTH, BM_SETCHECK, g_enableStereoWidth ? BST_CHECKED : BST_UNCHECKED, 0);
-        SendDlgItemMessageW(hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, BM_SETCHECK, g_enableDynamicAutoVolume ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendDlgItemMessageW(hDlg, IDC_CHECK_SPEECH_INTELLIGIBILITY_COMPRESSOR, BM_SETCHECK, g_enableSpeechIntelligibilityCompressor ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER, BM_SETCHECK, g_enableLufsGainNormalizer ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_EXCITER, BM_SETCHECK, g_enableExciter ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_DEEP_BASS, BM_SETCHECK, g_enableDeepBass ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -2888,11 +2900,11 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
             }
             return (INT_PTR)TRUE;
 
-        case IDC_CHECK_DYNAMIC_AUTO_VOLUME:
+        case IDC_CHECK_SPEECH_INTELLIGIBILITY_COMPRESSOR:
             if (notif == BN_CLICKED)
             {
-                g_enableDynamicAutoVolume =
-                    (SendDlgItemMessageW(hDlg, IDC_CHECK_DYNAMIC_AUTO_VOLUME, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                g_enableSpeechIntelligibilityCompressor =
+                    (SendDlgItemMessageW(hDlg, IDC_CHECK_SPEECH_INTELLIGIBILITY_COMPRESSOR, BM_GETCHECK, 0, 0) == BST_CHECKED);
             }
             return (INT_PTR)TRUE;
 
@@ -3295,7 +3307,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                 }
             }
         }
-        else if (HIWORD(wParam) == 0 && !g_isInTray && !g_minimizeToTrayFromCaptionButton) {
+        else if (HIWORD(wParam) == 0 && ShouldEnsureForeground(hDlg)) {
             ForceForegroundWindow(hDlg);
             PostMessageW(hDlg, WM_APP_ENSURE_FOREGROUND, 0, 0);
         }
@@ -3408,7 +3420,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         break;
     }
     case WM_APP_ENSURE_FOREGROUND:
-        if (IsWindow(hDlg)) {
+        if (ShouldEnsureForeground(hDlg)) {
             ForceForegroundWindow(hDlg);
             SetWindowPos(hDlg, HWND_NOTOPMOST, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);

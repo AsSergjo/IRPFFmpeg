@@ -380,7 +380,7 @@ void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistI
     ofs.write(reinterpret_cast<const char*>(&obsoleteAutoVolume), sizeof(obsoleteAutoVolume));
     ofs.write(reinterpret_cast<const char*>(&g_stereoWidthPercent), sizeof(g_stereoWidthPercent));
     ofs.write(reinterpret_cast<const char*>(&g_enableExciter), sizeof(g_enableExciter));
-    ofs.write(reinterpret_cast<const char*>(&g_enableDynamicAutoVolume), sizeof(g_enableDynamicAutoVolume));
+    ofs.write(reinterpret_cast<const char*>(&g_enableSpeechIntelligibilityCompressor), sizeof(g_enableSpeechIntelligibilityCompressor));
     ofs.write(reinterpret_cast<const char*>(&g_enableLimiterGainRider), sizeof(g_enableLimiterGainRider));
     ofs.write(reinterpret_cast<const char*>(&g_enableDeepBass), sizeof(g_enableDeepBass));
     ofs.write(reinterpret_cast<const char*>(&g_minimizeToTray), sizeof(g_minimizeToTray));
@@ -480,10 +480,10 @@ bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>
         ifs.clear();
     }
 
-    bool dynamicAutoVolume = g_enableDynamicAutoVolume;
-    ifs.read(reinterpret_cast<char*>(&dynamicAutoVolume), sizeof(dynamicAutoVolume));
+    bool speechIntelligibilityCompressor = g_enableSpeechIntelligibilityCompressor;
+    ifs.read(reinterpret_cast<char*>(&speechIntelligibilityCompressor), sizeof(speechIntelligibilityCompressor));
     if (!ifs.fail()) {
-        g_enableDynamicAutoVolume = dynamicAutoVolume;
+        g_enableSpeechIntelligibilityCompressor = speechIntelligibilityCompressor;
     }
     else {
         ifs.clear();
@@ -2800,8 +2800,8 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                                 pwfx->nChannels, static_cast<int>(pwfx->nSamplesPerSec));
                         }
 
-                        if (g_enableDynamicAutoVolume) {
-                            ProcessDynamicAutoVolume(audio_data, static_cast<size_t>(converted_count), pwfx->nChannels, static_cast<int>(pwfx->nSamplesPerSec));
+                        if (g_enableSpeechIntelligibilityCompressor) {
+                            ProcessSpeechIntelligibilityCompressor(audio_data, static_cast<size_t>(converted_count), pwfx->nChannels, static_cast<int>(pwfx->nSamplesPerSec));
                         }
 
                          // Process through filter graph if available

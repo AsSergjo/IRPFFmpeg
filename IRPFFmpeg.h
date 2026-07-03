@@ -84,7 +84,7 @@ extern std::atomic<float> current_eq_gain_bass;
 //защита для сообщений от старых потоков
 extern std::atomic<unsigned long> g_playbackGeneration;
 extern bool g_enableStereoWidth;
-extern bool g_enableDynamicAutoVolume;
+extern bool g_enableSpeechIntelligibilityCompressor;
 extern bool g_enableLufsGainNormalizer;
 extern bool g_enableExciter;
 extern bool g_enableDeepBass;

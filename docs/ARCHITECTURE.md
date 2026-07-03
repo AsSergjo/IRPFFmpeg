@@ -43,7 +43,7 @@ IRPFFmpeg состоит из двух исполняемых файлов.
 
 `audio_dsp.cpp`
 
-Realtime-обработка аудио: DC offset removal, Dynamic Auto Volume, LUFS-нормализация станций, DeepBass, Stereo Width, Exciter, GainRider и финальный лимитер.
+Realtime-обработка аудио: DC offset removal, компрессор разборчивости речи, LUFS-нормализация станций, DeepBass, Stereo Width, Exciter, GainRider и финальный лимитер.
 
 `file_recording.cpp`
 

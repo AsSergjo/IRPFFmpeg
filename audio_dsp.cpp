@@ -9,11 +9,13 @@
 
 namespace {
 
-struct DynamicAutoVolState {
+struct SpeechIntelligibilityCompressorState {
     float current_gain = 1.0f;
+    float reference_level_db = -20.0f;
+    bool reference_initialized = false;
 };
 
-DynamicAutoVolState g_dynamic_autovol;
+SpeechIntelligibilityCompressorState g_speech_intelligibility_compressor;
 
 constexpr int EXCITER_MAX_CHANNELS = 8;
 constexpr int DEEP_BASS_MAX_CHANNELS = 8;
@@ -64,7 +66,7 @@ struct Biquad {
 
 constexpr int LUFS_NORMALIZER_MAX_CHANNELS = 8;
 constexpr size_t LUFS_NORMALIZER_MAX_BLOCKS = 150;
-constexpr float g_referenceLufs = -8.10f;
+constexpr float g_referenceLufs = -9.00f;
 
 struct LufsBlock {
     double energy = 0.0;
@@ -78,13 +80,12 @@ struct LufsGainNormalizerState {
     uint64_t frames_in_block = 0;
     uint64_t frames_seen = 0;
     double block_energy_sum = 0.0;
-    double rolling_energy_sum = 0.0;
-    uint64_t rolling_frames = 0;
     size_t block_pos = 0;
     size_t block_count = 0;
     float current_lufs = -std::numeric_limits<float>::infinity();
     float desired_gain_db = 0.0f;
     float smoothed_gain_db = 0.0f;
+    bool allow_gain_increase = true;
     Biquad prefilter[LUFS_NORMALIZER_MAX_CHANNELS];
     Biquad rlb_highpass[LUFS_NORMALIZER_MAX_CHANNELS];
     LufsBlock blocks[LUFS_NORMALIZER_MAX_BLOCKS];
@@ -178,56 +179,119 @@ float ClampFloat(float value, float min_value, float max_value)
     return value;
 }
 
+double MeanSquareToLufs(double mean_square)
+{
+    return (mean_square > 0.0)
+        ? (-0.691 + 10.0 * std::log10(mean_square))
+        : -std::numeric_limits<double>::infinity();
+}
+
+// Recomputes current_lufs / desired_gain_db from the ring buffer using the
+// same two-stage gating scheme as EBU R128 Integrated Loudness, just applied
+// to a rolling ~60s window instead of a whole programme:
+//   1) "ungated" mean over everything currently buffered (each block already
+//      passed the absolute -70 LUFS gate on the way in, see PushLufsNormalizerBlock)
+//   2) relative gate: drop any block more than 10 LU quieter than that
+//      ungated mean, then recompute the mean from what's left.
+// This is what keeps short pauses/breaths during speech from dragging the
+// target loudness down and making the gain pump up in the quiet gaps.
+void RecomputeGatedLufs()
+{
+    LufsGainNormalizerState& st = g_lufs_normalizer;
+    if (st.block_count == 0) {
+        return;
+    }
+
+    double ungated_energy = 0.0;
+    uint64_t ungated_frames = 0;
+    for (size_t i = 0; i < st.block_count; ++i) {
+        ungated_energy += st.blocks[i].energy;
+        ungated_frames += st.blocks[i].frames;
+    }
+    if (ungated_frames == 0) {
+        return;
+    }
+
+    const double ungated_lufs =
+        MeanSquareToLufs(ungated_energy / static_cast<double>(ungated_frames));
+    if (!std::isfinite(ungated_lufs)) {
+        return;
+    }
+
+    constexpr double kRelativeGateOffsetLu = 10.0;
+    const double relative_threshold = ungated_lufs - kRelativeGateOffsetLu;
+
+    double gated_energy = 0.0;
+    uint64_t gated_frames = 0;
+    for (size_t i = 0; i < st.block_count; ++i) {
+        const LufsBlock& block = st.blocks[i];
+        const double block_lufs =
+            MeanSquareToLufs(block.energy / static_cast<double>(block.frames));
+        if (block_lufs >= relative_threshold) {
+            gated_energy += block.energy;
+            gated_frames += block.frames;
+        }
+    }
+
+    if (gated_frames == 0) {
+        // Degenerate case: everything got relatively gated out (can only
+        // happen with a single very short block) -- fall back to ungated.
+        gated_energy = ungated_energy;
+        gated_frames = ungated_frames;
+    }
+
+    constexpr uint64_t kMinAnalysisMs = 3000;
+    const uint64_t min_frames =
+        static_cast<uint64_t>(st.sample_rate) * kMinAnalysisMs / 1000ULL;
+    if (gated_frames < min_frames) {
+        return;
+    }
+
+    const double gated_lufs =
+        MeanSquareToLufs(gated_energy / static_cast<double>(gated_frames));
+    st.current_lufs = static_cast<float>(gated_lufs);
+    st.desired_gain_db =
+        ClampFloat(g_referenceLufs - st.current_lufs, -12.0f, 8.0f);
+}
+
 void PushLufsNormalizerBlock(double energy_sum, uint64_t frames)
 {
     if (frames == 0) {
         return;
     }
 
+    // Absolute gate per ITU-R BS.1770 / EBU R128: blocks quieter than this
+    // never enter the loudness measurement at all.
     constexpr double kAbsoluteGateLufs = -70.0;
+
+    // Separate, faster-reacting guard: while the *current* block looks like
+    // near-silence, freeze gain increases immediately instead of waiting for
+    // the windowed/gated average to catch up. This is what stops the gain
+    // from slowly creeping up on the noise floor during extended dead air
+    // (the relative gate above handles short pauses; this handles the
+    // pathological "whole window is quiet" case).
+    constexpr double kQuietGuardLufs = -50.0;
+
     const double block_mean_square = energy_sum / static_cast<double>(frames);
-    const double block_lufs = (block_mean_square > 0.0)
-        ? (-0.691 + 10.0 * std::log10(block_mean_square))
-        : -std::numeric_limits<double>::infinity();
+    const double block_lufs = MeanSquareToLufs(block_mean_square);
+
+    g_lufs_normalizer.allow_gain_increase = (block_lufs >= kQuietGuardLufs);
 
     if (block_lufs < kAbsoluteGateLufs) {
         return;
     }
 
     LufsBlock& slot = g_lufs_normalizer.blocks[g_lufs_normalizer.block_pos];
-    if (g_lufs_normalizer.block_count == LUFS_NORMALIZER_MAX_BLOCKS) {
-        g_lufs_normalizer.rolling_energy_sum -= slot.energy;
-        g_lufs_normalizer.rolling_frames -= slot.frames;
-    }
-    else {
+    if (g_lufs_normalizer.block_count < LUFS_NORMALIZER_MAX_BLOCKS) {
         ++g_lufs_normalizer.block_count;
     }
 
     slot.energy = energy_sum;
     slot.frames = frames;
-    g_lufs_normalizer.rolling_energy_sum += energy_sum;
-    g_lufs_normalizer.rolling_frames += frames;
     g_lufs_normalizer.block_pos =
         (g_lufs_normalizer.block_pos + 1) % LUFS_NORMALIZER_MAX_BLOCKS;
 
-    if (g_lufs_normalizer.rolling_frames == 0 || g_lufs_normalizer.rolling_energy_sum <= 0.0) {
-        return;
-    }
-
-    const double rolling_mean_square =
-        g_lufs_normalizer.rolling_energy_sum / static_cast<double>(g_lufs_normalizer.rolling_frames);
-    const double rolling_lufs = -0.691 + 10.0 * std::log10(rolling_mean_square);
-
-    constexpr uint64_t kMinAnalysisMs = 3000;
-    const uint64_t min_frames =
-        static_cast<uint64_t>(g_lufs_normalizer.sample_rate) * kMinAnalysisMs / 1000ULL;
-    if (g_lufs_normalizer.rolling_frames < min_frames) {
-        return;
-    }
-
-    g_lufs_normalizer.current_lufs = static_cast<float>(rolling_lufs);
-    g_lufs_normalizer.desired_gain_db =
-        ClampFloat(g_referenceLufs - g_lufs_normalizer.current_lufs, -12.0f, 8.0f);
+    RecomputeGatedLufs();
 }
 
 void ResetDCBlocker()
@@ -333,7 +397,7 @@ void PostLufsGainNormalizerStatus()
     }
 
     wchar_t text[96] = {};
-    swprintf_s(text, L"LG %c%3.1f", gain_db < 0.0f ? L'-' : L'+', std::fabs(gain_db));
+    swprintf_s(text, L"LG %c%.1f", gain_db < 0.0f ? L'\u2212' : L'+', std::fabs(gain_db));
 
     auto* payload = new std::wstring(text);
     if (!PostMessageW(g_hMainWnd, WM_APP_LUFS_NORMALIZER_STATUS, 0, reinterpret_cast<LPARAM>(payload))) {
@@ -345,7 +409,7 @@ void PostLufsGainNormalizerStatus()
 
 void ResetRealtimeAudioDspState()
 {
-    g_dynamic_autovol = DynamicAutoVolState();
+    g_speech_intelligibility_compressor = SpeechIntelligibilityCompressorState();
     ResetLufsGainNormalizerState();
     ResetDCBlocker();
     ResetExciterState();
@@ -407,8 +471,14 @@ void ApplyLufsGainNormalizer(float* buffer, size_t frames, int channels, int sam
 
     const float old_gain_db = g_lufs_normalizer.smoothed_gain_db;
     const float seconds = static_cast<float>(frames) / static_cast<float>(sample_rate);
-    const float max_step_db = 0.50f * seconds;
-    const float diff_db = g_lufs_normalizer.desired_gain_db - old_gain_db;
+    float target_gain_db = g_lufs_normalizer.desired_gain_db;
+    if (target_gain_db > old_gain_db && !g_lufs_normalizer.allow_gain_increase) {
+        target_gain_db = old_gain_db;
+    }
+
+    const float diff_db = target_gain_db - old_gain_db;
+    const float slew_db_per_sec = (diff_db > 0.0f) ? 0.25f : 0.50f;
+    const float max_step_db = slew_db_per_sec * seconds;
 
     if (diff_db > max_step_db) {
         g_lufs_normalizer.smoothed_gain_db += max_step_db;
@@ -417,7 +487,7 @@ void ApplyLufsGainNormalizer(float* buffer, size_t frames, int channels, int sam
         g_lufs_normalizer.smoothed_gain_db -= max_step_db;
     }
     else {
-        g_lufs_normalizer.smoothed_gain_db = g_lufs_normalizer.desired_gain_db;
+        g_lufs_normalizer.smoothed_gain_db = target_gain_db;
     }
 
     const float new_gain_db = g_lufs_normalizer.smoothed_gain_db;
@@ -475,18 +545,32 @@ void RemoveDCOffset(float* buffer, size_t frames, int channels, int sample_rate)
     }
 }
 
-void ProcessDynamicAutoVolume(float* buffer, size_t frames, int channels, int sample_rate)
+void ProcessSpeechIntelligibilityCompressor(float* buffer, size_t frames, int channels, int sample_rate)
 {
     if (!buffer || frames == 0) return;
     if (channels <= 0 || sample_rate <= 0) return;
 
-    constexpr float kTargetRms = 0.55f;
+    // Comfort/dialogue compressor. Runs after ApplyLufsGainNormalizer, so it
+    // must not re-target an absolute level (that would fight the loudness
+    // LUFS already set) -- instead it narrows the dynamic range around a
+    // slowly-tracked "typical level" of the current program material, so
+    // quiet dialogue gets pulled up and loud passages get gently pulled
+    // down, without flattening everything to one fixed point.
     constexpr float kSilenceGate = 0.006f;
-    constexpr float kMinGain = 0.30f;
-    constexpr float kMaxGain = 2.0f;
+    constexpr float kDeadZoneDb = 3.0f;      // no correction within +/-3 dB of the reference
+    constexpr float kLoudRatio = 2.5f;       // compression ratio above the dead zone
+    constexpr float kQuietRatio = 3.5f;      // expansion ratio below the dead zone
+    constexpr float kMaxCutDb = -8.0f;
+    constexpr float kMaxBoostDb = 12.0f;
     constexpr float kPeakCeiling = 0.96f;
-    constexpr float kAttackMs = 40.0f;
-    constexpr float kReleaseMs = 1600.0f;
+    constexpr float kQuietAttackMs = 150.0f;   // reacts fast so quiet speech isn't lost
+    constexpr float kQuietReleaseMs = 600.0f;  // eases the boost back off once level is normal
+    constexpr float kLoudAttackMs = 100.0f;
+    constexpr float kLoudReleaseMs = 500.0f;
+    constexpr float kReferenceTimeConstantMs = 8000.0f; // how fast "typical level" adapts
+
+    const float kMinGainLinear = powf(10.0f, kMaxCutDb / 20.0f);
+    const float kMaxGainLinear = powf(10.0f, kMaxBoostDb / 20.0f);
 
     size_t subblock_frames = static_cast<size_t>(sample_rate / 100);
     if (subblock_frames == 0) {
@@ -526,12 +610,59 @@ void ProcessDynamicAutoVolume(float* buffer, size_t frames, int channels, int sa
 
         const double rms = sqrt(max_channel_sum_sq / static_cast<double>(block_frames));
         const bool silence = (!(rms > 0.0) || rms < static_cast<double>(kSilenceGate));
+        const float block_ms = 1000.0f * static_cast<float>(block_frames) / static_cast<float>(sample_rate);
 
-        float desired_gain = silence ? 1.0f : static_cast<float>(static_cast<double>(kTargetRms) / rms);
-        if (desired_gain < kMinGain) desired_gain = kMinGain;
-        if (desired_gain > kMaxGain) desired_gain = kMaxGain;
+        float old_gain = g_speech_intelligibility_compressor.current_gain;
+        if (!(old_gain > 0.0f)) {
+            old_gain = 1.0f;
+        }
+        const float old_gain_db = 20.0f * log10f(old_gain);
 
-        float peak_safe_gain = kMaxGain;
+        float desired_gain_db = 0.0f;
+        bool boosting_regime = false;
+
+        if (silence) {
+            // Don't chase the noise floor and don't let silence pull the
+            // reference tracker off the program's real level -- just relax
+            // whatever gain we had back toward neutral.
+            desired_gain_db = 0.0f;
+            boosting_regime = (old_gain_db < 0.0f);
+        }
+        else {
+            const float block_db = 20.0f * static_cast<float>(log10(rms));
+
+            if (!g_speech_intelligibility_compressor.reference_initialized) {
+                g_speech_intelligibility_compressor.reference_level_db = block_db;
+                g_speech_intelligibility_compressor.reference_initialized = true;
+            }
+            else {
+                const float ref_coeff = expf(-block_ms / kReferenceTimeConstantMs);
+                g_speech_intelligibility_compressor.reference_level_db =
+                    block_db + (g_speech_intelligibility_compressor.reference_level_db - block_db) * ref_coeff;
+            }
+
+            const float deviation_db = block_db - g_speech_intelligibility_compressor.reference_level_db;
+
+            if (deviation_db > kDeadZoneDb) {
+                desired_gain_db = -(deviation_db - kDeadZoneDb) * (1.0f - 1.0f / kLoudRatio);
+                if (desired_gain_db < kMaxCutDb) desired_gain_db = kMaxCutDb;
+                boosting_regime = (desired_gain_db > old_gain_db);
+            }
+            else if (deviation_db < -kDeadZoneDb) {
+                desired_gain_db = -(deviation_db + kDeadZoneDb) * (1.0f - 1.0f / kQuietRatio);
+                if (desired_gain_db > kMaxBoostDb) desired_gain_db = kMaxBoostDb;
+                boosting_regime = (desired_gain_db > old_gain_db);
+            }
+            else {
+                boosting_regime = (old_gain_db < 0.0f);
+            }
+        }
+
+        float desired_gain = powf(10.0f, desired_gain_db / 20.0f);
+        if (desired_gain < kMinGainLinear) desired_gain = kMinGainLinear;
+        if (desired_gain > kMaxGainLinear) desired_gain = kMaxGainLinear;
+
+        float peak_safe_gain = kMaxGainLinear;
         if (peak_abs > 0.0f) {
             peak_safe_gain = kPeakCeiling / peak_abs;
             if (desired_gain > peak_safe_gain) {
@@ -539,20 +670,18 @@ void ProcessDynamicAutoVolume(float* buffer, size_t frames, int channels, int sa
             }
         }
 
-        float old_gain = g_dynamic_autovol.current_gain;
-        if (!(old_gain > 0.0f)) {
-            old_gain = 1.0f;
-        }
-
-        const float block_ms = 1000.0f * static_cast<float>(block_frames) / static_cast<float>(sample_rate);
-        const float time_ms = silence ? kReleaseMs
-            : ((desired_gain < old_gain) ? kAttackMs : kReleaseMs);
+        const float time_ms = boosting_regime ? kQuietAttackMs
+            : (silence ? kLoudReleaseMs
+                : ((desired_gain_db < 0.0f) ? kLoudAttackMs : kQuietReleaseMs));
         const float coeff = expf(-block_ms / time_ms);
         float new_gain = desired_gain + (old_gain - desired_gain) * coeff;
         if (new_gain > peak_safe_gain) {
             new_gain = peak_safe_gain;
         }
-        g_dynamic_autovol.current_gain = new_gain;
+        if (new_gain < kMinGainLinear) {
+            new_gain = kMinGainLinear;
+        }
+        g_speech_intelligibility_compressor.current_gain = new_gain;
 
         const float gain_step = (block_frames > 1)
             ? ((new_gain - old_gain) / static_cast<float>(block_frames - 1))

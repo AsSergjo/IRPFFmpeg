@@ -468,8 +468,7 @@ static const wchar_t* CURRENT_COVER_FILE = L"cover_cache\\cover.jpg";
 static bool TryBingImages(const std::wstring& trackName)
 {        
     std::string encoded = url_encode(wstring_to_utf8(trackName));
-    
-    std::string url = "https://www.bing.com/images/search?q=single%20or%20album%20cover%20" + encoded + "&form=HDRSC3&first=1&qft=+filterui:aspect-square";
+    std::string url = "https://www.bing.com/images/search?q=song%20cover%20" + encoded + "&form=HDRSC3&first=1&qft=+filterui:aspect-square";
 
     //LogToUI("BingImages for url: " + url);
 
