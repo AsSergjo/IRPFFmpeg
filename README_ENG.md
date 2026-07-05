@@ -54,8 +54,6 @@ Recommended download flow from GitHub Releases:
 
 Versioned project archives contain only IRPFFmpeg project files: `IRPFFmpeg.exe`, `Start_IRPFFmpeg.exe`, language files, documentation and project support files. Starting with `v1.1.0`, new versions are published without third-party DLLs; extract the new project archive over a working folder that already has `heap_dll`.
 
-For small fixes that only change the main application, replacing the standalone `IRPFFmpeg.exe` is usually enough.
-
 Minimal working folder layout after extracting the DLL support archive and the project archive:
 
 ```text
@@ -81,7 +79,7 @@ LICENSE
 THIRD_PARTY_NOTICES.md
 ```
 
-If you already have a working folder with `heap_dll`, updating usually means downloading the new project archive or the standalone `IRPFFmpeg.exe`. If a release changes `Start_IRPFFmpeg.exe`, `Language/*.lng`, documentation or project support files, use the project archive instead of only the exe.
+If you already have a working folder with `heap_dll`, update by downloading the new project archive and extracting it over the current folder.
 
 If you assemble the package manually, use x64 DLLs only and do not mix files from different builds.
 
