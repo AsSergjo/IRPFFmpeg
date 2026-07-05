@@ -56,7 +56,7 @@ IRPFFmpeg-vX.Y.Z-project-win-x64.zip
   LICENSE
   THIRD_PARTY_NOTICES.md
   README.md
-  README_ENG.md
+  README_RU.md
   CHANGELOG.md
   Language/
     english.lng

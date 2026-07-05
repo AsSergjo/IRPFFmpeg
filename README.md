@@ -1,60 +1,60 @@
 # IRPFFmpeg
 
-[English version](README_ENG.md)
+[Russian version](README_RU.md)
 
-IRPFFmpeg - настольный проигрыватель интернет-радио для Windows. Он воспроизводит сетевые аудиопотоки через FFmpeg, показывает текущий трек, загружает обложки, ведет историю и умеет записывать эфир в MP3 320 kbit/sec или FLAC.
+IRPFFmpeg is a desktop internet radio player for Windows. It plays network audio streams through FFmpeg, shows the current track, loads cover art, keeps playback history and can record broadcasts to MP3 320 kbit/sec or FLAC.
 
-Проект сделан как легкое Win32-приложение на C++17: без Electron, без браузерной оболочки, с отдельным загрузчиком для аккуратной работы с FFmpeg/SDL2 DLL.
+The project is a lightweight C++17 Win32 application: no Electron, no browser shell, with a separate launcher that prepares the FFmpeg/SDL2 DLL environment.
 
-![Главное окно IRPFFmpeg](docs/assets/main-window.png)
+![IRPFFmpeg main window](docs/assets/main-window.png)
 
-![Окно настроек IRPFFmpeg](window_programm_setting_rus.png)
+![IRPFFmpeg settings window](window_programm_setting.png)
 
-![Компактный режим IRPFFmpeg](compact_mode.png)
+![IRPFFmpeg compact mode](compact_mode.png)
 
-## Возможности
+## Features
 
-- воспроизведение интернет-радио по URL;
-- работа с M3U-плейлистом;
-- добавление, удаление, переименование, сохранение и переключение станций из интерфейса;
-- отображение ICY/stream metadata и технического статуса потока;
-- автоматическое обновление отображаемого названия станции из ICY metadata;
-- более устойчивое воспроизведение проблемных потоков с битым или нестабильным аудио;
-- автоматический поиск и кэширование обложек;
-- запись текущего эфира в `Rec`;
-- экспорт записей в MP3 320 kbit/sec или FLAC;
-- добавление метаданных и обложки в записанные файлы, когда данные доступны;
-- регулировка громкости, баса и верхних частот;
-- Stereo Width, Exciter, DeepBass, компрессор разборчивости речи, LUFS-нормализация станций, GainRider и финальный лимитер;
-- сворачивание в системный трей;
-- компактный режим с визуализацией спектра, строкой текущего трека, кнопкой возврата к предыдущей станции и кнопкой возврата в обычный режим;
-- возможность держать компактное окно поверх всех окон;
-- всплывающее окно с обложкой и названием трека при смене композиции в режиме трея или компактном режиме;
-- выбор языка интерфейса: русский или английский;
-- отдельный загрузчик `Start_IRPFFmpeg.exe`, который проверяет runtime DLL и запускает основное приложение.
+- play internet radio streams by URL;
+- work with M3U playlists;
+- add, delete, rename, save and switch stations from the interface;
+- show ICY/stream metadata and technical stream status;
+- automatically update the displayed station name from ICY metadata;
+- handle problematic streams with corrupted or unstable audio more robustly;
+- search, download and cache cover art;
+- record the current broadcast to `Rec`;
+- export recordings to MP3 320 kbit/sec or FLAC;
+- write metadata and cover art to recordings when available;
+- adjust volume, bass and treble;
+- Stereo Width, Exciter, DeepBass, Speech Intelligibility Compressor, Station LUFS Normalizer, GainRider and final limiter;
+- minimize to the system tray;
+- compact mode with spectrum visualization, current track text, previous-station button and restore-to-normal button;
+- optional always-on-top behavior for the compact window;
+- show a cover/title popup on track change while the app is in the tray or compact mode;
+- choose the interface language: Russian or English;
+- launch through `Start_IRPFFmpeg.exe`, which checks runtime DLLs and starts the main app.
 
-## Быстрый запуск
+## Quick Start
 
-Для обычного запуска используйте:
+Run:
 
 ```text
 Start_IRPFFmpeg.exe
 ```
 
-`IRPFFmpeg.exe` лучше не запускать напрямую: основному приложению нужны библиотеки из папки `heap_dll`. Загрузчик проверяет наличие DLL, добавляет папку во временный `PATH` дочернего процесса и запускает плеер.
+It is better not to run `IRPFFmpeg.exe` directly: the main application needs libraries from the `heap_dll` folder. The launcher checks for DLLs, temporarily adds `heap_dll` to the child process `PATH` and starts the player.
 
-Рекомендуемая схема загрузки из GitHub Releases:
+Recommended download flow from GitHub Releases:
 
-1. Скачайте один раз DLL-support архив `IRPFFmpeg-support-win-x64.zip`, если у вас еще нет папки `heap_dll` со сторонними DLL.
-2. Скачайте project-архив актуальной версии, например `IRPFFmpeg-v1.1.0-project-win-x64.zip`.
-3. Распакуйте оба архива в одну папку.
-4. Запускайте `Start_IRPFFmpeg.exe`.
+1. Download the DLL support archive `IRPFFmpeg-support-win-x64.zip` once if you do not already have a `heap_dll` folder with third-party DLLs.
+2. Download the project archive for the current version, for example `IRPFFmpeg-v1.1.0-project-win-x64.zip`.
+3. Extract both archives into the same folder.
+4. Run `Start_IRPFFmpeg.exe`.
 
-`IRPFFmpeg-support-win-x64.zip` содержит только сторонние runtime DLL в папке `heap_dll` и не привязан к версии приложения. Обновлять его нужно только тогда, когда меняется набор сторонних DLL.
+`IRPFFmpeg-support-win-x64.zip` contains only third-party runtime DLLs inside `heap_dll` and is not tied to the application version. It only needs to change when the third-party DLL set changes.
 
-Версионные project-архивы содержат только файлы IRPFFmpeg: `IRPFFmpeg.exe`, `Start_IRPFFmpeg.exe`, файлы языка, документацию и служебные файлы проекта. Начиная с `v1.1.0`, новые версии публикуются без сторонних DLL; достаточно распаковать новый project-архив поверх рабочей папки с уже установленным `heap_dll`.
+Versioned project archives contain only IRPFFmpeg project files: `IRPFFmpeg.exe`, `Start_IRPFFmpeg.exe`, language files, documentation and project support files. Starting with `v1.1.0`, new versions are published without third-party DLLs; extract the new project archive over a working folder that already has `heap_dll`.
 
-Минимальный состав рабочей папки после распаковки DLL-support архива и project-архива:
+Minimal working folder layout after extracting the DLL support archive and the project archive:
 
 ```text
 Start_IRPFFmpeg.exe
@@ -79,45 +79,45 @@ LICENSE
 THIRD_PARTY_NOTICES.md
 ```
 
-Если у вас уже есть рабочая папка с `heap_dll`, для обновления достаточно скачать новый project-архив и распаковать его поверх текущей папки.
+If you already have a working folder with `heap_dll`, update by downloading the new project archive and extracting it over the current folder.
 
-Если собирать комплект вручную, используйте только x64 DLL и не смешивайте файлы из разных сборок.
+If you assemble the package manually, use x64 DLLs only and do not mix files from different builds.
 
-Где взять DLL вручную:
+Where to get DLLs manually:
 
-- FFmpeg DLL (`avcodec`, `avfilter`, `avformat`, `avutil`, `swresample`, `swscale`) - с официальной страницы загрузки FFmpeg: https://ffmpeg.org/download.html. Сам проект FFmpeg публикует исходный код и дает ссылки на готовые Windows builds, например gyan.dev и BtbN. Нужна shared/dev x64-сборка с DLL из папки `bin`.
-- `SDL2.dll` - из официальных архивов SDL2 для Visual C++: https://www.libsdl.org/release/. Обычно нужен архив вида `SDL2-devel-...-VC.zip`, внутри DLL лежит в `lib\x64`.
-- `SDL2_image.dll` - из релизов SDL2_image: https://github.com/libsdl-org/SDL_image/releases. Берите Windows x64/VC-комплект, совместимый с вашей версией SDL2.
-- `libpng16.dll`, `jpeg62.dll`, `turbojpeg.dll`, `zlib1.dll` - сопутствующие библиотеки изображений и сжатия. Обычно они уже идут в комплекте с SDL2_image/вашей сборкой зависимостей или могут быть получены через vcpkg (`x64-windows`). Для релиза используйте ровно те DLL, с которыми приложение было собрано и проверено.
+- FFmpeg DLLs (`avcodec`, `avfilter`, `avformat`, `avutil`, `swresample`, `swscale`) - from the official FFmpeg download page: https://ffmpeg.org/download.html. FFmpeg publishes source code and links to Windows builds such as gyan.dev and BtbN. You need a shared/dev x64 build and DLLs from its `bin` folder.
+- `SDL2.dll` - from official SDL2 Visual C++ archives: https://www.libsdl.org/release/. Usually this is an archive like `SDL2-devel-...-VC.zip`; the DLL is inside `lib\x64`.
+- `SDL2_image.dll` - from SDL2_image releases: https://github.com/libsdl-org/SDL_image/releases. Use a Windows x64/VC package compatible with your SDL2 version.
+- `libpng16.dll`, `jpeg62.dll`, `turbojpeg.dll`, `zlib1.dll` - image/compression libraries. They are usually included with SDL2_image/your dependency bundle or can be obtained through vcpkg (`x64-windows`). For releases, use the exact DLLs that were built and tested with the app.
 
-Если загрузчик сообщает, что не хватает DLL, верните недостающие файлы в `heap_dll` или скачайте полный релизный архив заново.
+If the launcher reports missing DLLs, restore the missing files to `heap_dll` or download the full release archive again.
 
-Во время работы приложение может создать:
+During runtime, the application may create:
 
 ```text
-app.dat         - настройки и состояние
-Rec/            - записанные треки
-cover_cache/    - кэш обложек
-debug_log.txt   - диагностический лог, если включено логирование
+app.dat         - settings and state
+Rec/            - recorded tracks
+cover_cache/    - cover cache
+debug_log.txt   - diagnostic log, if logging is enabled
 ```
 
-Если поток присылает некорректные аудиоданные, приложение пропускает такие фреймы, временно показывает статус `Пропускаем битые данные от сервера...` и продолжает ждать стабильный аудиопрофиль без лишнего шума в строке состояния.
+When a stream sends invalid audio data, the app skips those frames, temporarily shows `Skipping corrupted data from server...` and keeps waiting for a stable audio profile without noisy FFmpeg messages in the status line.
 
-## Сборка из исходников
+## Building From Source
 
-Требования:
+Requirements:
 
 - Windows 10/11;
 - Visual Studio 2022;
 - MSVC toolset v143;
 - Windows SDK 10;
 - C++17;
-- FFmpeg development package с `include`, `lib` и `bin`;
-- SDL2 и SDL2_image.
+- FFmpeg development package with `include`, `lib` and `bin`;
+- SDL2 and SDL2_image.
 
-Откройте `IRPFFmpeg.sln` в Visual Studio и соберите конфигурацию `Release|x64`.
+Open `IRPFFmpeg.sln` in Visual Studio and build `Release|x64`.
 
-В текущем проекте пути к зависимостям прописаны в `IRPFFmpeg.vcxproj`:
+The current project paths are configured in `IRPFFmpeg.vcxproj`:
 
 ```text
 D:\Code\ffmpeg-dev\include
@@ -127,66 +127,66 @@ C:\dev\vcpkg\installed\x64-windows\include\SDL2
 C:\dev\vcpkg\installed\x64-windows\lib
 ```
 
-Если зависимости лежат в другом месте, измените пути в свойствах проекта или в `.vcxproj`.
+If your dependencies are in a different location, update the project properties or `.vcxproj`.
 
-Подробная инструкция: [docs/BUILD.md](docs/BUILD.md).
+Detailed build instructions: [docs/BUILD.md](docs/BUILD.md).
 
-## Структура проекта
+## Project Structure
 
 ```text
-IRPFFmpeg.sln              - решение Visual Studio
-IRPFFmpeg.vcxproj          - основное приложение
-Start_IRPFFmpeg.vcxproj    - загрузчик приложения
-IRPFFmpeg.cpp/.h           - Win32 UI, управление состоянием, воспроизведение
-audio_dsp.cpp/.h           - обработка звука
-file_recording.cpp/.h      - запись MP3/FLAC и метаданные
-cover_art.cpp/.h           - поиск, загрузка и кэширование обложек
-metadata_decode.cpp/.h     - декодирование текстовых метаданных
-language_manager.cpp/.h    - локализация интерфейса
-compact_mode.cpp/.h        - компактный режим окна
-util.cpp/.h                - общие утилиты
-Language/                  - файлы локализации интерфейса
-docs/                      - документация для пользователей и разработчиков
+IRPFFmpeg.sln              - Visual Studio solution
+IRPFFmpeg.vcxproj          - main application
+Start_IRPFFmpeg.vcxproj    - launcher application
+IRPFFmpeg.cpp/.h           - Win32 UI, state management, playback
+audio_dsp.cpp/.h           - audio processing
+file_recording.cpp/.h      - MP3/FLAC recording and metadata
+cover_art.cpp/.h           - cover search, download and caching
+metadata_decode.cpp/.h     - text metadata decoding
+language_manager.cpp/.h    - interface localization
+compact_mode.cpp/.h        - compact window mode
+util.cpp/.h                - shared utilities
+Language/                  - interface localization files
+docs/                      - user and developer documentation
 ```
 
-Подробнее об устройстве: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Документация
+## Documentation
 
-- [Руководство пользователя](docs/USER_GUIDE.md)
-- [Сборка проекта](docs/BUILD.md)
-- [Подготовка релиза](docs/RELEASE.md)
-- [Архитектура](docs/ARCHITECTURE.md)
-- [Описание для GitHub](docs/GITHUB_REPOSITORY.md)
-- [Участие в разработке](CONTRIBUTING.md)
-- [История изменений](CHANGELOG.md)
-- [Сторонние компоненты](THIRD_PARTY_NOTICES.md)
-- [Авторы](AUTHORS.md)
+- [User guide](docs/USER_GUIDE.md)
+- [Build instructions](docs/BUILD.md)
+- [Release preparation](docs/RELEASE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [GitHub repository description](docs/GITHUB_REPOSITORY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [Authors](AUTHORS.md)
 
-## Публикация на GitHub
+## GitHub Publishing
 
-Репозиторий подготовлен как исходный код проекта. Бинарные файлы сборки, папки `x64/`, `.vs/`, временные настройки, кэш обложек и записи исключены через `.gitignore`.
+The repository is prepared as source code. Build outputs, `x64/`, `.vs/`, temporary settings, cover cache and recordings are excluded through `.gitignore`.
 
-Готовые EXE/DLL лучше публиковать не в git-истории, а через GitHub Releases. Инструкция по составу архива находится в [docs/RELEASE.md](docs/RELEASE.md).
+Ready EXE/DLL packages should be published through GitHub Releases, not stored in git history. See [docs/RELEASE.md](docs/RELEASE.md).
 
-## Лицензия
+## License
 
-Код IRPFFmpeg распространяется под лицензией MIT. Подробности: [LICENSE](LICENSE).
+IRPFFmpeg source code is distributed under the MIT License. See [LICENSE](LICENSE).
 
-MIT License разрешает использовать, изменять и распространять код, но требует сохранять copyright notice и текст лицензии в копиях или существенных частях кода.
+MIT License allows using, modifying and distributing the code, but requires preserving the copyright notice and license text in copies or substantial portions of the software.
 
-Если вы используете код IRPFFmpeg в своем проекте, пожалуйста, по возможности укажите автора и источник:
+If you use IRPFFmpeg code in another project, attribution is appreciated where practical:
 
 ```text
 Uses code from IRPFFmpeg by AsSergjo: https://github.com/AsSergjo
 ```
 
-Это просьба об уважительном упоминании автора, а не дополнительное ограничение сверх MIT License.
+This attribution request is not an additional restriction beyond the MIT License.
 
-Сторонние компоненты распространяются на своих условиях:
+Third-party components are distributed under their own terms:
 
-- FFmpeg DLL - LGPL/GPL согласно конкретной сборке FFmpeg;
-- SDL2 и SDL2_image - zlib license;
-- остальные runtime-библиотеки - согласно их собственным лицензиям.
+- FFmpeg DLLs - LGPL/GPL according to the exact FFmpeg build;
+- SDL2 and SDL2_image - zlib license;
+- other runtime libraries - according to their own licenses.
 
-Подробности и релизные требования: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Details and release requirements: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
