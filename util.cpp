@@ -830,6 +830,7 @@ bool initCoverRenderer(HWND hDlg)
 
     HWND hStatic = GetDlgItem(hDlg, IDC_STATIC_IMG);
     if (!hStatic) return false;
+    ShowWindow(hStatic, SW_HIDE);
 
     RECT rc;
     GetWindowRect(hStatic, &rc);
@@ -979,12 +980,19 @@ bool redrawCoverImage(HWND hDlg)
         GetWindowRect(sdlHwnd, &curRc);
         MapWindowPoints(HWND_DESKTOP, hDlg, (LPPOINT)&curRc, 2);
 
-        if (curRc.left != rc.left || curRc.top != rc.top ||
-            curRc.right - curRc.left != drawW || curRc.bottom - curRc.top != drawH) {
+        const bool needsMoveOrResize =
+            curRc.left != rc.left || curRc.top != rc.top ||
+            curRc.right - curRc.left != drawW || curRc.bottom - curRc.top != drawH;
+
+        if (needsMoveOrResize) {
             SetWindowPos(sdlHwnd, HWND_TOP, rc.left, rc.top, drawW, drawH,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOZORDER);
+                SWP_NOACTIVATE | SWP_SHOWWINDOW);
             // Даём SDL время обработать изменение размера
             SDL_PumpEvents();
+        }
+        else {
+            SetWindowPos(sdlHwnd, HWND_TOP, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
     }
 

@@ -3524,7 +3524,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
         if (wParam == IDT_COVER_RESTORE) {
 
-            if (!redrawCoverImage(hDlg)) {
+            if (!CompactModeIsActive() && !redrawCoverImage(hDlg)) {
 
 				//LogToUI("Failed to redraw IDT_COVER_RESTORE cover image after UAC");
 
@@ -3970,10 +3970,19 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
     case WM_APP_COVER_DOWNLOADED: {
 
         bool coverReady = false;
+        const bool compactActive = CompactModeIsActive();
         if (initCoverRenderer(hDlg)) {
             CompactModeInstallCoverSubclass(hDlg);
+            if (compactActive) {
+                if (HWND hCover = getCoverRendererWindow()) {
+                    ShowWindow(hCover, SW_HIDE);
+                }
+            }
             if (reloadCoverTexture()) {
-                if (!redrawCoverImage(hDlg)) {
+                if (compactActive) {
+                    coverReady = true;
+                }
+                else if (!redrawCoverImage(hDlg)) {
 					//LogToUI("Failed to redraw cover image after download");
                 }
                 else {

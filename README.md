@@ -8,9 +8,15 @@ The project is a lightweight C++17 Win32 application: no Electron, no browser sh
 
 ![IRPFFmpeg main window](docs/assets/main-window.png)
 
+Main window: playlist management, playback controls, stream status, cover art, history and spectrum visualization in the normal layout.
+
 ![IRPFFmpeg settings window](window_programm_setting.png)
 
+Settings window: language selection, audio processing modules, tray behavior, cover popup and compact-mode options.
+
 ![IRPFFmpeg compact mode](compact_mode.png)
+
+Compact mode: a small spectrum window with the current track line, previous-station button and restore-to-normal button.
 
 ## Features
 

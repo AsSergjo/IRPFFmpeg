@@ -963,6 +963,7 @@ void CompactModeExit(HWND hDlg)
         SetWindowLongPtrW(hDlg, GWL_EXSTYLE, g_normalWindowExStyle);
     }
 
+    const bool hasCoverRenderer = getCoverRendererWindow() != nullptr;
     for (const ControlLayoutSnapshot& snapshot : g_normalControlLayout) {
         HWND hControl = GetDlgItem(hDlg, snapshot.id);
         if (!hControl) {
@@ -971,7 +972,12 @@ void CompactModeExit(HWND hDlg)
         const int width = snapshot.rect.right - snapshot.rect.left;
         const int height = snapshot.rect.bottom - snapshot.rect.top;
         MoveWindow(hControl, snapshot.rect.left, snapshot.rect.top, width, height, FALSE);
-        ShowWindow(hControl, snapshot.visible ? SW_SHOW : SW_HIDE);
+
+        bool shouldShow = snapshot.visible;
+        if (snapshot.id == IDC_STATIC_IMG && hasCoverRenderer) {
+            shouldShow = false;
+        }
+        ShowWindow(hControl, shouldShow ? SW_SHOW : SW_HIDE);
     }
 
     if (g_normalWindowPlacementSaved) {
@@ -986,7 +992,12 @@ void CompactModeExit(HWND hDlg)
     }
 
     if (HWND hCover = getCoverRendererWindow()) {
+        if (HWND hStatic = GetDlgItem(hDlg, IDC_STATIC_IMG)) {
+            ShowWindow(hStatic, SW_HIDE);
+        }
         ShowWindow(hCover, SW_SHOW);
+        SetWindowPos(hCover, HWND_TOP, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
     redrawCoverImage(hDlg);
