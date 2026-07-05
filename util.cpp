@@ -349,6 +349,7 @@ static bool read_wstring_limited(std::ifstream& ifs, std::wstring& value, size_t
 
 static constexpr char kPlaylistIcyFlagsMagic[] = "ICYF001";
 static constexpr char kLufsGainNormalizerMagic[] = "LUFS001";
+static constexpr char kCompactAlwaysOnTopMagic[] = "COTP001";
 
 void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistItem>& playlist, int selectedIndex) {
     std::ofstream ofs(filename, std::ios::binary);
@@ -384,7 +385,7 @@ void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistI
     ofs.write(reinterpret_cast<const char*>(&g_enableLimiterGainRider), sizeof(g_enableLimiterGainRider));
     ofs.write(reinterpret_cast<const char*>(&g_enableDeepBass), sizeof(g_enableDeepBass));
     ofs.write(reinterpret_cast<const char*>(&g_minimizeToTray), sizeof(g_minimizeToTray));
-    ofs.write(reinterpret_cast<const char*>(&g_showTrackToastInTray), sizeof(g_showTrackToastInTray));
+    ofs.write(reinterpret_cast<const char*>(&g_showTrackToast), sizeof(g_showTrackToast));
     ofs.write(reinterpret_cast<const char*>(&g_trackToastPositionSaved), sizeof(g_trackToastPositionSaved));
     ofs.write(reinterpret_cast<const char*>(&g_trackToastX), sizeof(g_trackToastX));
     ofs.write(reinterpret_cast<const char*>(&g_trackToastY), sizeof(g_trackToastY));
@@ -399,6 +400,9 @@ void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistI
 
     ofs.write(kLufsGainNormalizerMagic, sizeof(kLufsGainNormalizerMagic));
     ofs.write(reinterpret_cast<const char*>(&g_enableLufsGainNormalizer), sizeof(g_enableLufsGainNormalizer));
+
+    ofs.write(kCompactAlwaysOnTopMagic, sizeof(kCompactAlwaysOnTopMagic));
+    ofs.write(reinterpret_cast<const char*>(&g_compactModeAlwaysOnTop), sizeof(g_compactModeAlwaysOnTop));
 }
 
 bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>& playlist, int& selectedIndex) {
@@ -516,10 +520,10 @@ bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>
         ifs.clear();
     }
 
-    bool showTrackToastInTray = g_showTrackToastInTray;
-    ifs.read(reinterpret_cast<char*>(&showTrackToastInTray), sizeof(showTrackToastInTray));
+    bool showTrackToast = g_showTrackToast;
+    ifs.read(reinterpret_cast<char*>(&showTrackToast), sizeof(showTrackToast));
     if (!ifs.fail()) {
-        g_showTrackToastInTray = showTrackToastInTray;
+        g_showTrackToast = showTrackToast;
     }
     else {
         ifs.clear();
@@ -598,6 +602,20 @@ bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>
     if (ifs.fail()) {
         ifs.clear();
     }
+
+    char compactAlwaysOnTopMagic[sizeof(kCompactAlwaysOnTopMagic)] = {};
+    ifs.read(compactAlwaysOnTopMagic, sizeof(compactAlwaysOnTopMagic));
+    if (!ifs.fail() && memcmp(compactAlwaysOnTopMagic, kCompactAlwaysOnTopMagic, sizeof(kCompactAlwaysOnTopMagic)) == 0) {
+        bool compactAlwaysOnTop = g_compactModeAlwaysOnTop;
+        ifs.read(reinterpret_cast<char*>(&compactAlwaysOnTop), sizeof(compactAlwaysOnTop));
+        if (!ifs.fail()) {
+            g_compactModeAlwaysOnTop = compactAlwaysOnTop;
+        }
+    }
+    if (ifs.fail()) {
+        ifs.clear();
+    }
+
     return true;
 }
 
@@ -915,6 +933,21 @@ bool reloadCoverTexture()
     gTexture = newTexture;
 
     return true;
+}
+
+HWND getCoverRendererWindow()
+{
+    if (!gWindow) {
+        return nullptr;
+    }
+
+    SDL_SysWMinfo wmInfo;
+    SDL_VERSION(&wmInfo.version);
+    if (!SDL_GetWindowWMInfo(gWindow, &wmInfo)) {
+        return nullptr;
+    }
+
+    return wmInfo.info.win.window;
 }
 
 bool redrawCoverImage(HWND hDlg)
@@ -3247,6 +3280,7 @@ void ShowCQTThread() {
         showcqt_running.store(false);
         return;
     }
+    SDL_RenderSetLogicalSize(showcqt_renderer, targetW, targetH);
 
     showcqt_texture = SDL_CreateTexture(showcqt_renderer, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, SHOWCQT_WIDTH, SHOWCQT_HEIGHT);
     if (!showcqt_texture) {
@@ -3290,9 +3324,41 @@ void ShowCQTThread() {
                 showcqt_running.store(false);
                 break;
             }
+            const Uint32 showcqtWindowId = SDL_GetWindowID(showcqt_window);
+            if (event.type == SDL_MOUSEBUTTONDOWN &&
+                event.button.button == SDL_BUTTON_LEFT &&
+                event.button.windowID == showcqtWindowId) {
+                SDL_CaptureMouse(SDL_TRUE);
+                PostMessageW(g_hMainWnd, WM_APP_COMPACT_SPECTRUM_DRAG, kCompactSpectrumDragBegin, 0);
+            }
+            else if (event.type == SDL_MOUSEMOTION &&
+                event.motion.windowID == showcqtWindowId &&
+                (event.motion.state & SDL_BUTTON_LMASK) != 0) {
+                PostMessageW(g_hMainWnd, WM_APP_COMPACT_SPECTRUM_DRAG, kCompactSpectrumDragMove, 0);
+            }
+            else if (event.type == SDL_MOUSEBUTTONUP &&
+                event.button.button == SDL_BUTTON_LEFT &&
+                event.button.windowID == showcqtWindowId) {
+                SDL_CaptureMouse(SDL_FALSE);
+                PostMessageW(g_hMainWnd, WM_APP_COMPACT_SPECTRUM_DRAG, kCompactSpectrumDragEnd, 0);
+            }
         }
 
         if (!showcqt_running.load()) break;
+
+        RECT parentClient = {};
+        if (GetClientRect(hSSdl, &parentClient)) {
+            const int parentW = parentClient.right - parentClient.left;
+            const int parentH = parentClient.bottom - parentClient.top;
+            if (parentW > 0 && parentH > 0 && (parentW != targetW || parentH != targetH)) {
+                targetW = parentW;
+                targetH = parentH;
+                SetWindowPos(hwndSDL, HWND_TOP, 0, 0, targetW, targetH,
+                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+                SDL_SetWindowSize(showcqt_window, targetW, targetH);
+                SDL_RenderSetLogicalSize(showcqt_renderer, targetW, targetH);
+            }
+        }
 
         // 2. Check if it's time to render a new frame
         const double now = (double)SDL_GetTicks();

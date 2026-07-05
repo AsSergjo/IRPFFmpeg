@@ -38,8 +38,8 @@ IDI_SMALL               ICON                    "small.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION 1,1,0,0
+ PRODUCTVERSION 1,1,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x3L
@@ -56,11 +56,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "IRPFFmpeg"
             VALUE "FileDescription", "IRPFFmpeg internet radio player"
-            VALUE "FileVersion", "0.1.0.0 beta 1"
+            VALUE "FileVersion", "1.1.0.0"
             VALUE "InternalName", "IRPFFmpeg"
             VALUE "OriginalFilename", "IRPFFmpeg.exe"
             VALUE "ProductName", "IRPFFmpeg"
-            VALUE "ProductVersion", "0.1.0.0 beta 1"
+            VALUE "ProductVersion", "1.1.0.0"
             VALUE "LegalCopyright", "Copyright (c) 2026"
         END
     END
@@ -146,12 +146,12 @@ BEGIN
     LTEXT           "",IDC_ST_SETTING,622,285,24,24,SS_CENTERIMAGE
 END
 
-IDD_DIALOG_SETTING DIALOGEX 0, 0, 255, 231
+IDD_DIALOG_SETTING DIALOGEX 0, 0, 255, 244
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 FONT 10, "Segoe UI", 400, 0, 0x1
 BEGIN
     CTEXT           "Настройки",IDC_SETTINGWND_TITLE,7,0,241,15
-    DEFPUSHBUTTON   "OK",IDOK,99,207,50,14
+    DEFPUSHBUTTON   "OK",IDOK,99,220,50,14
     GROUPBOX        " Режимы записи ",IDC_GROUP_RECORDING,7,15,241,28
     CONTROL         " MP3, LAME, 320 kbit/sec",IDC_CHECK_MP3,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,28,96,10
     CONTROL         " FLAC, s16, ~1000 kbit/sec",IDC_CHECK_FLAC,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,133,28,96,10
@@ -167,13 +167,15 @@ BEGIN
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,107,210,10
     CONTROL         " GainRider / Контроль Пиков",IDC_CHECK_LIMITER_GAIN_RIDER,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,120,210,10
-    GROUPBOX        " Настройки программы ",IDC_GROUP_PROGRAM,7,140,241,64
+    GROUPBOX        " Настройки программы ",IDC_GROUP_PROGRAM,7,140,241,77
     CONTROL         " При минимизации отправлять в трей",IDC_CHECK_MINIMIZE_TO_TRAY,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,152,210,10
-    CONTROL         " В трее показывать обложку при смене трека",IDC_CHECK_SHOW_TRACK_TOAST,
-                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,165,220,10
-    LTEXT           "Язык:",IDC_STATIC_LANGUAGE,20,182,45,8
-    COMBOBOX        IDC_COMBO_LANGUAGE,68,179,160,45,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL         " В трее и компактном режиме показывать обложку",IDC_CHECK_SHOW_TRACK_TOAST,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,165,225,10
+    CONTROL         " Компактный режим поверх всех окон",IDC_CHECK_COMPACT_ALWAYS_ON_TOP,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,178,225,10
+    LTEXT           "Язык:",IDC_STATIC_LANGUAGE,20,197,45,8
+    COMBOBOX        IDC_COMBO_LANGUAGE,68,194,160,45,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 END
 
 
@@ -213,7 +215,7 @@ BEGIN
         RIGHTMARGIN, 248
         VERTGUIDE, 21
         TOPMARGIN, 7
-        BOTTOMMARGIN, 212
+        BOTTOMMARGIN, 225
     END
 END
 #endif    // APSTUDIO_INVOKED

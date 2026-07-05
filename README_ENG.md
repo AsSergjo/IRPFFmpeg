@@ -10,6 +10,8 @@ The project is a lightweight C++17 Win32 application: no Electron, no browser sh
 
 ![IRPFFmpeg settings window](window_programm_setting.png)
 
+![IRPFFmpeg compact mode](compact_mode.png)
+
 ## Features
 
 - play internet radio streams by URL;
@@ -25,7 +27,9 @@ The project is a lightweight C++17 Win32 application: no Electron, no browser sh
 - adjust volume, bass and treble;
 - Stereo Width, Exciter, DeepBass, Speech Intelligibility Compressor, Station LUFS Normalizer, GainRider and final limiter;
 - minimize to the system tray;
-- show a cover/title popup on track change while the app is in the tray;
+- compact mode with spectrum visualization, current track text, previous-station button and restore-to-normal button;
+- optional always-on-top behavior for the compact window;
+- show a cover/title popup on track change while the app is in the tray or compact mode;
 - choose the interface language: Russian or English;
 - launch through `Start_IRPFFmpeg.exe`, which checks runtime DLLs and starts the main app.
 
@@ -42,13 +46,13 @@ It is better not to run `IRPFFmpeg.exe` directly: the main application needs lib
 Recommended download flow from GitHub Releases:
 
 1. Download the DLL support archive `IRPFFmpeg-support-win-x64.zip` once if you do not already have a `heap_dll` folder with third-party DLLs.
-2. Download the project archive for the current version, for example `IRPFFmpeg-v1.0.3-project-win-x64.zip`.
+2. Download the project archive for the current version, for example `IRPFFmpeg-v1.1.0-project-win-x64.zip`.
 3. Extract both archives into the same folder.
 4. Run `Start_IRPFFmpeg.exe`.
 
 `IRPFFmpeg-support-win-x64.zip` contains only third-party runtime DLLs inside `heap_dll` and is not tied to the application version. It only needs to change when the third-party DLL set changes.
 
-Versioned project archives contain only IRPFFmpeg project files: `IRPFFmpeg.exe`, `Start_IRPFFmpeg.exe`, language files, documentation and project support files. Starting with later releases, for example `v1.0.4`, new versions are published without third-party DLLs; extract the new project archive over a working folder that already has `heap_dll`.
+Versioned project archives contain only IRPFFmpeg project files: `IRPFFmpeg.exe`, `Start_IRPFFmpeg.exe`, language files, documentation and project support files. Starting with `v1.1.0`, new versions are published without third-party DLLs; extract the new project archive over a working folder that already has `heap_dll`.
 
 For small fixes that only change the main application, replacing the standalone `IRPFFmpeg.exe` is usually enough.
 
@@ -141,6 +145,7 @@ file_recording.cpp/.h      - MP3/FLAC recording and metadata
 cover_art.cpp/.h           - cover search, download and caching
 metadata_decode.cpp/.h     - text metadata decoding
 language_manager.cpp/.h    - interface localization
+compact_mode.cpp/.h        - compact window mode
 util.cpp/.h                - shared utilities
 Language/                  - interface localization files
 docs/                      - user and developer documentation

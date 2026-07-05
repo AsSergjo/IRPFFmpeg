@@ -91,7 +91,8 @@ extern bool g_enableDeepBass;
 extern bool g_enableLimiterGainRider;
 extern bool g_enableIcyStationNameUpdates;
 extern bool g_minimizeToTray;
-extern bool g_showTrackToastInTray;
+extern bool g_showTrackToast;
+extern bool g_compactModeAlwaysOnTop;
 extern bool g_trackToastPositionSaved;
 extern int g_trackToastX;
 extern int g_trackToastY;
@@ -139,6 +140,11 @@ extern const int maxVisibleExtent;
 #define WM_APP_STATION_NAME_FROM_ICY (WM_APP + 16)
 #define WM_APP_ENSURE_FOREGROUND (WM_APP + 17)
 #define WM_APP_LUFS_NORMALIZER_STATUS (WM_APP + 18)
+#define WM_APP_COMPACT_SPECTRUM_DRAG (WM_APP + 19)
+
+constexpr WPARAM kCompactSpectrumDragBegin = 1;
+constexpr WPARAM kCompactSpectrumDragMove = 2;
+constexpr WPARAM kCompactSpectrumDragEnd = 3;
 
 struct StationNameFromIcyPayload {
     unsigned long generation = 0;

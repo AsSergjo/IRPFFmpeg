@@ -2,6 +2,7 @@
 #define _WIN32_WINNT 0x0600
 #include "framework.h"
 #include "IRPFFmpeg.h"
+#include "compact_mode.h"
 #include "cover_art.h"
 #include "file_recording.h"
 #include "language_manager.h"
@@ -49,6 +50,8 @@ const wchar_t CLASS_NAME[] = L"IRP+ffmpeg";
 static constexpr UINT kTrayIconId = 1;
 static constexpr int kTrackToastSize = 300;
 static constexpr int kTrackToastMargin = 18;
+static constexpr BYTE kTrackToastLayeredAlpha = 255;
+static constexpr UINT kTrackToastHideDelayMs = 3000;
 static const wchar_t TRACK_TOAST_CLASS[] = L"IRPFFmpegTrackToast";
 static const wchar_t TRACK_TOAST_TEXT_CLASS[] = L"IRPFFmpegTrackToastText";
 // ------------------------------- 
@@ -101,7 +104,8 @@ bool g_enableDeepBass = false;
 bool g_enableLimiterGainRider = true;
 bool g_enableIcyStationNameUpdates = true;
 bool g_minimizeToTray = true;
-bool g_showTrackToastInTray = true;
+bool g_showTrackToast = true;
+bool g_compactModeAlwaysOnTop = true;
 bool g_trackToastPositionSaved = false;
 int g_trackToastX = 0;
 int g_trackToastY = 0;
@@ -169,6 +173,8 @@ static SDL_Renderer* g_trackToastRenderer = nullptr;
 static bool g_trackToastDragging = false;
 static POINT g_trackToastDragOffset = {};
 static UINT g_wmTaskbarCreated = 0;
+static void SetupMainDialogTooltips(HWND hDlg);
+
 #define WM_RENDER_COVER (WM_USER + 100)
 // формат: "Global\\{GUID}")
 #define SINGLE_INSTANCE_MUTEX_NAME L"Global\\IRPffmpegInstanceMutex_1"
@@ -265,6 +271,7 @@ static void InvalidateNowPlayingBar(HWND hDlg)
     if (hBar) {
         InvalidateRect(hBar, NULL, FALSE);
     }
+    CompactModeInvalidateTitle();
 }
 
 static void UpdatePlayPauseButtonIcon(HWND hDlg)
@@ -360,6 +367,59 @@ static void CleanupTrackToastSdl()
         SDL_DestroyWindow(g_trackToastSdlWindow);
         g_trackToastSdlWindow = nullptr;
     }
+}
+
+static void ConfigureTrackToastLayeredWindow(HWND hWnd)
+{
+    if (!hWnd) {
+        return;
+    }
+
+    LONG_PTR exStyle = GetWindowLongPtrW(hWnd, GWL_EXSTYLE);
+    if ((exStyle & WS_EX_LAYERED) == 0) {
+        SetWindowLongPtrW(hWnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+    }
+
+    SetLayeredWindowAttributes(hWnd, 0, kTrackToastLayeredAlpha, LWA_ALPHA);
+}
+
+static void RestartTrackToastHideTimer(HWND hWnd)
+{
+    if (!hWnd || !IsWindow(hWnd)) {
+        return;
+    }
+
+    KillTimer(hWnd, IDT_TRACK_TOAST_HIDE);
+    SetTimer(hWnd, IDT_TRACK_TOAST_HIDE, kTrackToastHideDelayMs, nullptr);
+}
+
+static void SaveTrackToastPosition(HWND hWnd)
+{
+    if (!hWnd || !IsWindow(hWnd)) {
+        return;
+    }
+
+    RECT toastRc = {};
+    if (GetWindowRect(hWnd, &toastRc)) {
+        g_trackToastPositionSaved = true;
+        g_trackToastX = toastRc.left;
+        g_trackToastY = toastRc.top;
+    }
+}
+
+static void FinishTrackToastDrag(HWND hWnd, bool releaseCapture)
+{
+    if (!g_trackToastDragging) {
+        return;
+    }
+
+    g_trackToastDragging = false;
+    if (releaseCapture && GetCapture() == hWnd) {
+        ReleaseCapture();
+    }
+
+    SaveTrackToastPosition(hWnd);
+    RestartTrackToastHideTimer(hWnd);
 }
 
 static bool EnsureTrackToastSdl(HWND hWnd)
@@ -698,12 +758,14 @@ static LRESULT CALLBACK TrackToastTextProc(HWND hWnd, UINT msg, WPARAM wParam, L
         return 0;
     }
     case WM_LBUTTONDOWN:
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONUP:
     {
         HWND hParent = GetParent(hWnd);
         if (hParent) {
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             MapWindowPoints(hWnd, hParent, &pt, 1);
-            SendMessageW(hParent, WM_LBUTTONDOWN, wParam, MAKELPARAM(pt.x, pt.y));
+            SendMessageW(hParent, msg, wParam, MAKELPARAM(pt.x, pt.y));
             return 0;
         }
         break;
@@ -757,21 +819,12 @@ static LRESULT CALLBACK TrackToastProc(HWND hWnd, UINT msg, WPARAM wParam, LPARA
         break;
     case WM_LBUTTONUP:
         if (g_trackToastDragging) {
-            g_trackToastDragging = false;
-            ReleaseCapture();
-
-            RECT toastRc = {};
-            GetWindowRect(hWnd, &toastRc);
-            g_trackToastPositionSaved = true;
-            g_trackToastX = toastRc.left;
-            g_trackToastY = toastRc.top;
-
-            SetTimer(hWnd, IDT_TRACK_TOAST_HIDE, 6500, nullptr);
+            FinishTrackToastDrag(hWnd, true);
             return 0;
         }
         break;
     case WM_CAPTURECHANGED:
-        g_trackToastDragging = false;
+        FinishTrackToastDrag(hWnd, false);
         break;
     case WM_NCDESTROY:
         CleanupTrackToastSdl();
@@ -823,11 +876,13 @@ static void RegisterTrackToastClass()
             textRegistered = true;
         }
     }
+
 }
 
 static void ShowTrackToastIfNeeded(HWND hOwner)
 {
-    if (!g_showTrackToastInTray || !g_isInTray) {
+    const bool showInCurrentMode = g_isInTray || (CompactModeIsActive() && !g_isInTray);
+    if (!g_showTrackToast || !showInCurrentMode) {
         return;
     }
 
@@ -840,7 +895,7 @@ static void ShowTrackToastIfNeeded(HWND hOwner)
 
     if (!g_hTrackToast) {
         g_hTrackToast = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
             TRACK_TOAST_CLASS,
             L"",
             WS_POPUP,
@@ -855,6 +910,7 @@ static void ShowTrackToastIfNeeded(HWND hOwner)
     if (!g_hTrackToast) {
         return;
     }
+    ConfigureTrackToastLayeredWindow(g_hTrackToast);
 
     if (!g_hTrackToastText) {
         g_hTrackToastText = CreateWindowExW(
@@ -900,7 +956,7 @@ static void ShowTrackToastIfNeeded(HWND hOwner)
         InvalidateRect(g_hTrackToastText, nullptr, TRUE);
         UpdateWindow(g_hTrackToastText);
     }
-    SetTimer(g_hTrackToast, IDT_TRACK_TOAST_HIDE, 6500, nullptr);
+    RestartTrackToastHideTimer(g_hTrackToast);
 }
 
 static bool IsTransientPlaybackStatus(const std::wstring& status)
@@ -1012,6 +1068,20 @@ static std::wstring GetNowPlayingBarText()
     return barText;
 }
 
+static std::wstring GetCompactModeTitleText()
+{
+    return GetNowPlayingTitleText();
+}
+
+static void RefreshCompactModeTooltips(HWND hDlg)
+{
+    SetupMainDialogTooltips(hDlg);
+}
+
+static void InvalidateCompactModeNormalText(HWND hDlg)
+{
+    InvalidateNowPlayingBar(hDlg);
+}
 static std::string TrimAsciiCopy(std::string value)
 {
     auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
@@ -1126,8 +1196,6 @@ static void AddTooltip(HWND hTooltip, HWND hParent, HWND hControl, const wchar_t
     SendMessageW(hTooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
 }
 
-static void SetupMainDialogTooltips(HWND hDlg);
-
 static void PopulateLanguageCombo(HWND hDlg)
 {
     HWND hCombo = GetDlgItem(hDlg, IDC_COMBO_LANGUAGE);
@@ -1172,7 +1240,8 @@ static void ApplySettingsDialogLanguage(HWND hDlg)
     SetDlgItemTextW(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER, Tr("settings.effect.lufs_gain_normalizer", L" LUFS-нормализация станций"));
     SetDlgItemTextW(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, Tr("settings.effect.gain_rider", L" GainRider / Контроль Пиков"));
     SetDlgItemTextW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, Tr("settings.program.minimize_to_tray", L" При минимизации отправлять в трей"));
-    SetDlgItemTextW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, Tr("settings.program.show_track_toast", L" В трее показывать обложку при смене трека"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, Tr("settings.program.show_track_toast", L" В трее и компактном режиме показывать обложку"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_COMPACT_ALWAYS_ON_TOP, Tr("settings.program.compact_always_on_top", L" Компактный режим поверх всех окон"));
 }
 
 static void ApplyMainDialogLanguage(HWND hDlg)
@@ -1199,6 +1268,8 @@ static void SetupMainDialogTooltips(HWND hDlg)
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_SLIDER_BASS), Tr("tooltip.slider.bass", L"Низкие Частоты"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_SLIDER_HI), Tr("tooltip.slider.treble", L"Высокие Частоты"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_SLIDER_VOL), Tr("tooltip.slider.volume", L"Громкость"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_COMPACT_PREVIOUS), Tr("tooltip.previous_station", L"Вернуться к ранее звучавшей станции"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_COMPACT_RESTORE), Tr("tooltip.compact.restore", L"Вернуться в обычный режим"));
 }
 
 static void SetupSettingsDialogTooltips(HWND hDlg)
@@ -1213,7 +1284,8 @@ static void SetupSettingsDialogTooltips(HWND hDlg)
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_LUFS_GAIN_NORMALIZER), Tr("tooltip.effect.lufs_gain_normalizer", L"Медленно приводить уровень разных станций к эталону -9.00 LUFS"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER), Tr("tooltip.effect.gain_rider", L"Контролировать пики и удерживать комфортный уровень сигнала"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY), Tr("tooltip.program.minimize_to_tray", L"При нажатии кнопки свернуть прятать программу в трей"));
-    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_SHOW_TRACK_TOAST), Tr("tooltip.program.show_track_toast", L"Когда программа в трее, показывать обложку при смене трека"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_SHOW_TRACK_TOAST), Tr("tooltip.program.show_track_toast", L"Когда программа в трее или компактном режиме, показывать обложку при смене трека"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_COMPACT_ALWAYS_ON_TOP), Tr("tooltip.program.compact_always_on_top", L"В компактном режиме держать окно поверх других окон"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDOK), Tr("tooltip.settings.ok", L"Сохранить настройки и закрыть окно"));
 }
 
@@ -1388,6 +1460,8 @@ void PlayAtIndex(int index, bool resetReconnect) {
     // Update UI
     UpdatePlayingIndicator(-1, index);
     g_currentlyPlayingIndex = index;
+    g_nowPlayingTitle.clear();
+    InvalidateNowPlayingBar(g_hMainWnd);
     ListView_SetItemState(hListView, index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 
     int itemCount = ListView_GetItemCount(hListView);
@@ -2834,7 +2908,8 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
         SendDlgItemMessageW(hDlg, IDC_CHECK_DEEP_BASS, BM_SETCHECK, g_enableDeepBass ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_LIMITER_GAIN_RIDER, BM_SETCHECK, g_enableLimiterGainRider ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, BM_SETCHECK, g_minimizeToTray ? BST_CHECKED : BST_UNCHECKED, 0);
-        SendDlgItemMessageW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, BM_SETCHECK, g_showTrackToastInTray ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendDlgItemMessageW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, BM_SETCHECK, g_showTrackToast ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendDlgItemMessageW(hDlg, IDC_CHECK_COMPACT_ALWAYS_ON_TOP, BM_SETCHECK, g_compactModeAlwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
         SetDlgItemInt(hDlg, IDC_EDIT_STEREO_WIDTH, static_cast<UINT>((std::max)(0, (std::min)(100, g_stereoWidthPercent))), FALSE);
 
         if (HWND hEditStereo = GetDlgItem(hDlg, IDC_EDIT_STEREO_WIDTH)) {
@@ -2959,8 +3034,17 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
         case IDC_CHECK_SHOW_TRACK_TOAST:
             if (notif == BN_CLICKED)
             {
-                g_showTrackToastInTray =
+                g_showTrackToast =
                     (SendDlgItemMessageW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            }
+            return (INT_PTR)TRUE;
+
+        case IDC_CHECK_COMPACT_ALWAYS_ON_TOP:
+            if (notif == BN_CLICKED)
+            {
+                g_compactModeAlwaysOnTop =
+                    (SendDlgItemMessageW(hDlg, IDC_CHECK_COMPACT_ALWAYS_ON_TOP, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                CompactModeSetAlwaysOnTop(g_hMainWnd, g_compactModeAlwaysOnTop);
             }
             return (INT_PTR)TRUE;
 
@@ -3161,6 +3245,12 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         g_hSliderBass = GetDlgItem(hDlg, IDC_SLIDER_BASS);
         g_hNowPlayingBar = GetDlgItem(hDlg, IDC_STATIC_NOW_PLAYING_BAR);
         SetupMainDialogTooltips(hDlg);
+        CompactModeCallbacks compactCallbacks;
+        compactCallbacks.getTitleText = GetCompactModeTitleText;
+        compactCallbacks.refreshTooltips = RefreshCompactModeTooltips;
+        compactCallbacks.invalidateNormalText = InvalidateCompactModeNormalText;
+        CompactModeConfigure(hDlg, g_hStatic, hListboxFont, hButtonFont, compactCallbacks);
+        CompactModeInstallCoverSubclass(hDlg);
 
         // Load playlist from file
         int selectedIndex = -1;
@@ -3168,6 +3258,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             // If loading from app.dat fails, load from m3u as a fallback
             loadPlaylist(L"playlist.m3u", playlist);
         }
+        CompactModeSetAlwaysOnTop(hDlg, g_compactModeAlwaysOnTop);
         if (!LoadLanguageById(g_languageId)) {
             g_languageId = L"russian";
             LoadLanguageById(g_languageId);
@@ -3346,22 +3437,64 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
         break;
 
+    case WM_GETMINMAXINFO:
+        if (CompactModeHandleGetMinMaxInfo(hDlg, lParam)) {
+            return (INT_PTR)TRUE;
+        }
+        break;
+
+    case WM_NCHITTEST:
+    {
+        INT_PTR hitResult = 0;
+        if (CompactModeHandleNcHitTest(hDlg, lParam, hitResult)) {
+            return hitResult;
+        }
+        break;
+    }
+
     case WM_SIZE:
         if (wParam == SIZE_MINIMIZED) {
-            if (IsWindow(hDlg)) {
+            if (!CompactModeIsActive() && IsWindow(hDlg)) {
                 SetWindowPos(hDlg, HWND_NOTOPMOST, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             }
+        }
+        else if (CompactModeIsActive()) {
+            CompactModeLayout(hDlg);
+            InvalidateRect(hDlg, nullptr, TRUE);
+            return (INT_PTR)TRUE;
         }
         g_minimizeToTrayFromCaptionButton = false;
         break;
     case WM_LBUTTONDOWN:
     {
+        if (CompactModeIsActive()) {
+            CompactModeBeginDrag(hDlg);
+            return (INT_PTR)TRUE;
+        }
+
         // Начинаем перетаскивание окна
         ReleaseCapture(); // важно для корректного drag
         SendMessage(hDlg, WM_NCLBUTTONDOWN, HTCAPTION, 0);
         break;
     }
+    case WM_MOUSEMOVE:
+        if (CompactModeHandleMouseMove(hDlg)) {
+            return (INT_PTR)TRUE;
+        }
+        break;
+
+    case WM_LBUTTONUP:
+        if (CompactModeIsActive()) {
+            CompactModeEndDrag(hDlg);
+            return (INT_PTR)TRUE;
+        }
+        break;
+
+    case WM_CAPTURECHANGED:
+        CompactModeEndDrag(hDlg);
+        break;
+
     case WM_CTLCOLORSTATIC:
     {
         HDC hdc = (HDC)wParam;
@@ -3378,6 +3511,11 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
     }
     case WM_TIMER:
     {
+        if (wParam == IDT_COMPACT_TITLE_SCROLL) {
+            CompactModeAdvanceTitleScroll(hDlg);
+            return TRUE;
+        }
+
         if (wParam == 1)
         {
             KillTimer(hDlg, 1); // одноразовый
@@ -3422,8 +3560,25 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
     case WM_APP_ENSURE_FOREGROUND:
         if (ShouldEnsureForeground(hDlg)) {
             ForceForegroundWindow(hDlg);
-            SetWindowPos(hDlg, HWND_NOTOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            if (CompactModeIsActive()) {
+                CompactModeApplyZOrder(hDlg);
+            }
+            else {
+                SetWindowPos(hDlg, HWND_NOTOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            }
+        }
+        return (INT_PTR)TRUE;
+
+    case WM_APP_COMPACT_SPECTRUM_DRAG:
+        if (wParam == kCompactSpectrumDragBegin) {
+            CompactModeBeginDrag(hDlg);
+        }
+        else if (wParam == kCompactSpectrumDragMove) {
+            CompactModeHandleMouseMove(hDlg);
+        }
+        else if (wParam == kCompactSpectrumDragEnd) {
+            CompactModeEndDrag(hDlg);
         }
         return (INT_PTR)TRUE;
 
@@ -3611,6 +3766,10 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             RequestApplicationExit(hDlg);
             return (INT_PTR)TRUE;
 
+        case IDC_BUTTON_COMPACT_RESTORE:
+            CompactModeExit(hDlg);
+            return (INT_PTR)TRUE;
+
         case ID_LISTBOX_COPY:
         {
             HWND hList = GetDlgItem(hDlg, IDC_LIST2);
@@ -3746,6 +3905,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
             return (INT_PTR)TRUE;
         }
+        case IDC_BUTTON_COMPACT_PREVIOUS:
         case IDC_BUTTON_PREVIOUS_STATION:
         {
             if (g_previousStationIndex >= 0 &&
@@ -3811,6 +3971,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
         bool coverReady = false;
         if (initCoverRenderer(hDlg)) {
+            CompactModeInstallCoverSubclass(hDlg);
             if (reloadCoverTexture()) {
                 if (!redrawCoverImage(hDlg)) {
 					//LogToUI("Failed to redraw cover image after download");
@@ -3991,6 +4152,10 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
     case WM_DRAWITEM:
     {
         LPDRAWITEMSTRUCT pDIS = (LPDRAWITEMSTRUCT)lParam;
+
+        if (CompactModeDrawItem(pDIS)) {
+            return TRUE;
+        }
 
         if (pDIS->CtlType == ODT_STATIC && pDIS->CtlID == IDC_STATIC_NOW_PLAYING_BAR)
         {
@@ -4175,8 +4340,13 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 		PAINTSTRUCT ps;
 		HDC hdc = BeginPaint(hDlg, &ps);    
 
-        if (!redrawCoverImage(hDlg)) {
-            //LogToUI("Failed to redraw cover image after WM_PAINT");
+        if (CompactModeIsActive()) {
+            CompactModeDrawChrome(hDlg, hdc);
+        }
+        else {
+            if (!redrawCoverImage(hDlg)) {
+                //LogToUI("Failed to redraw cover image after WM_PAINT");
+            }
         }
 
 		EndPaint(hDlg, &ps);    

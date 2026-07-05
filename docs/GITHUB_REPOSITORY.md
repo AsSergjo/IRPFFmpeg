@@ -5,13 +5,13 @@
 Короткое описание для поля About:
 
 ```text
-Windows internet radio player built with C++17, Win32 and FFmpeg, with cover art, M3U playlists, audio DSP and MP3/FLAC recording.
+Windows internet radio player built with C++17, Win32 and FFmpeg, with cover art, compact mode, audio DSP and MP3/FLAC recording.
 ```
 
 Русский вариант:
 
 ```text
-Проигрыватель интернет-радио для Windows на C++17/Win32/FFmpeg с обложками, M3U-плейлистами, обработкой звука и записью в MP3/FLAC.
+Проигрыватель интернет-радио для Windows на C++17/Win32/FFmpeg с обложками, компактным режимом, обработкой звука и записью в MP3/FLAC.
 ```
 
 ## Topics
@@ -57,5 +57,5 @@ docs/assets/main-window.png
 ## Первое описание репозитория
 
 ```markdown
-IRPFFmpeg is a compact Windows internet radio player. It plays network audio streams through FFmpeg, manages M3U playlists, shows current track metadata, searches for cover art, applies realtime audio processing and records broadcasts to MP3 or FLAC.
+IRPFFmpeg is a compact Windows internet radio player. It plays network audio streams through FFmpeg, manages M3U playlists, shows current track metadata, searches for cover art, offers a compact always-on-top mode, applies realtime audio processing and records broadcasts to MP3 or FLAC.
 ```
