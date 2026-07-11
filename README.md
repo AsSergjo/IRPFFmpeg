@@ -6,6 +6,8 @@ IRPFFmpeg is a desktop internet radio player for Windows. It plays network audio
 
 The project is a lightweight C++17 Win32 application: no Electron, no browser shell, with a separate launcher that prepares the FFmpeg/SDL2 DLL environment.
 
+[Watch a short IRPFFmpeg demo on YouTube](https://youtu.be/AuAjhOTRdEU).
+
 ![IRPFFmpeg normal mode](normal_mode.png)
 
 Main window: playlist management, playback controls, stream status, cover art, history and spectrum visualization in the normal layout.
