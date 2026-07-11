@@ -1,5 +1,6 @@
 #include "util.h"
 #include "audio_dsp.h"
+#include "eq_window.h"
 #include "IRPFFmpeg.h"
 #include "file_recording.h"
 #include "language_manager.h"
@@ -37,6 +38,7 @@
 static SDL_Window* gWindow = NULL;
 static SDL_Renderer* gRenderer = NULL;
 static SDL_Texture* gTexture = NULL;
+static SDL_Rect gCoverContentRect = { 0, 0, 0, 0 };
 static const wchar_t* CURRENT_COVER_FILE_W = L"cover_cache\\cover.jpg";
 static const char* CURRENT_COVER_FILE_A = "cover_cache\\cover.jpg";
 
@@ -59,6 +61,97 @@ int showcqt_sample_rate = 44100;
 
 static constexpr int SHOWCQT_VIS_CHANNELS = 2;
 static constexpr int SHOWCQT_BUFFER_FRAMES = 24;
+
+static SDL_Rect DetectCoverContentRect(SDL_Surface* surface)
+{
+    SDL_Rect fullRect = { 0, 0, surface ? surface->w : 0, surface ? surface->h : 0 };
+    if (!surface || surface->w < 32 || surface->h < 32) {
+        return fullRect;
+    }
+
+    SDL_Surface* scanSurface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_ARGB8888, 0);
+    if (!scanSurface) {
+        return fullRect;
+    }
+
+    const bool mustUnlock = SDL_MUSTLOCK(scanSurface) != 0;
+    if (mustUnlock && SDL_LockSurface(scanSurface) != 0) {
+        SDL_FreeSurface(scanSurface);
+        return fullRect;
+    }
+
+    const int width = scanSurface->w;
+    const int height = scanSurface->h;
+    const int maxHorizontalInset = (std::max)(1, width / 8);
+    const int maxVerticalInset = (std::max)(1, height / 8);
+    const int requiredLightRowPixels = (width * 98 + 99) / 100;
+    const int requiredLightColumnPixels = (height * 98 + 99) / 100;
+
+    auto isLightPixel = [scanSurface](int x, int y) {
+        const Uint8* rowBytes = static_cast<const Uint8*>(scanSurface->pixels) + y * scanSurface->pitch;
+        const Uint32 pixel = reinterpret_cast<const Uint32*>(rowBytes)[x];
+        Uint8 r = 0;
+        Uint8 g = 0;
+        Uint8 b = 0;
+        SDL_GetRGB(pixel, scanSurface->format, &r, &g, &b);
+        return r >= 235 && g >= 235 && b >= 235;
+    };
+
+    auto isLightRow = [&](int y) {
+        int lightPixels = 0;
+        for (int x = 0; x < width; ++x) {
+            if (isLightPixel(x, y)) {
+                ++lightPixels;
+            }
+        }
+        return lightPixels >= requiredLightRowPixels;
+    };
+
+    auto isLightColumn = [&](int x) {
+        int lightPixels = 0;
+        for (int y = 0; y < height; ++y) {
+            if (isLightPixel(x, y)) {
+                ++lightPixels;
+            }
+        }
+        return lightPixels >= requiredLightColumnPixels;
+    };
+
+    int top = 0;
+    while (top < maxVerticalInset && isLightRow(top)) {
+        ++top;
+    }
+    int bottom = 0;
+    while (bottom < maxVerticalInset && isLightRow(height - 1 - bottom)) {
+        ++bottom;
+    }
+    int left = 0;
+    while (left < maxHorizontalInset && isLightColumn(left)) {
+        ++left;
+    }
+    int right = 0;
+    while (right < maxHorizontalInset && isLightColumn(width - 1 - right)) {
+        ++right;
+    }
+
+    if (mustUnlock) {
+        SDL_UnlockSurface(scanSurface);
+    }
+    SDL_FreeSurface(scanSurface);
+
+    const int detectedEdges =
+        (top > 0 ? 1 : 0) +
+        (bottom > 0 ? 1 : 0) +
+        (left > 0 ? 1 : 0) +
+        (right > 0 ? 1 : 0);
+    const int contentWidth = width - left - right;
+    const int contentHeight = height - top - bottom;
+    if (detectedEdges < 2 || contentWidth <= 0 || contentHeight <= 0) {
+        return fullRect;
+    }
+
+    return SDL_Rect{ left, top, contentWidth, contentHeight };
+}
 
 static void PostUiWideMessage(UINT msg, const std::wstring& text)
 {
@@ -350,6 +443,7 @@ static bool read_wstring_limited(std::ifstream& ifs, std::wstring& value, size_t
 static constexpr char kPlaylistIcyFlagsMagic[] = "ICYF001";
 static constexpr char kLufsGainNormalizerMagic[] = "LUFS001";
 static constexpr char kCompactAlwaysOnTopMagic[] = "COTP001";
+static constexpr char kParametricEqMagic[] = "PEQ5001";
 
 void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistItem>& playlist, int selectedIndex) {
     std::ofstream ofs(filename, std::ios::binary);
@@ -403,6 +497,16 @@ void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistI
 
     ofs.write(kCompactAlwaysOnTopMagic, sizeof(kCompactAlwaysOnTopMagic));
     ofs.write(reinterpret_cast<const char*>(&g_compactModeAlwaysOnTop), sizeof(g_compactModeAlwaysOnTop));
+
+    ofs.write(kParametricEqMagic, sizeof(kParametricEqMagic));
+    int eqBandCount = kParametricEqBandCount;
+    ofs.write(reinterpret_cast<const char*>(&eqBandCount), sizeof(eqBandCount));
+    for (int band = 0; band < kParametricEqBandCount; ++band) {
+        float gainDb = g_parametricEqGainDb[band].load();
+        float q = g_parametricEqQ[band].load();
+        ofs.write(reinterpret_cast<const char*>(&gainDb), sizeof(gainDb));
+        ofs.write(reinterpret_cast<const char*>(&q), sizeof(q));
+    }
 }
 
 bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>& playlist, int& selectedIndex) {
@@ -446,6 +550,8 @@ bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>
 	float eq_gain_bass = 3.0f;
 	ifs.read(reinterpret_cast<char*>(&eq_gain_bass), sizeof(eq_gain_bass));
 	current_eq_gain_bass.store(eq_gain_bass);
+    StoreParametricEqBand(0, eq_gain_bass, g_parametricEqQ[0].load());
+    StoreParametricEqBand(kParametricEqBandCount - 1, eq_gain, g_parametricEqQ[kParametricEqBandCount - 1].load());
 	//flack or mp3 settings can be loaded here
     ifs.read(reinterpret_cast<char*>(&rec_is_flac), sizeof(rec_is_flac));
 
@@ -610,6 +716,30 @@ bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>
         ifs.read(reinterpret_cast<char*>(&compactAlwaysOnTop), sizeof(compactAlwaysOnTop));
         if (!ifs.fail()) {
             g_compactModeAlwaysOnTop = compactAlwaysOnTop;
+        }
+    }
+    if (ifs.fail()) {
+        ifs.clear();
+    }
+
+    char parametricEqMagic[sizeof(kParametricEqMagic)] = {};
+    ifs.read(parametricEqMagic, sizeof(parametricEqMagic));
+    if (!ifs.fail() && memcmp(parametricEqMagic, kParametricEqMagic, sizeof(kParametricEqMagic)) == 0) {
+        int eqBandCount = 0;
+        ifs.read(reinterpret_cast<char*>(&eqBandCount), sizeof(eqBandCount));
+        if (!ifs.fail()) {
+            for (int band = 0; band < eqBandCount; ++band) {
+                float gainDb = 0.0f;
+                float q = 1.0f;
+                ifs.read(reinterpret_cast<char*>(&gainDb), sizeof(gainDb));
+                ifs.read(reinterpret_cast<char*>(&q), sizeof(q));
+                if (ifs.fail()) {
+                    break;
+                }
+                if (band < kParametricEqBandCount) {
+                    StoreParametricEqBand(band, gainDb, q);
+                }
+            }
         }
     }
     if (ifs.fail()) {
@@ -830,7 +960,6 @@ bool initCoverRenderer(HWND hDlg)
 
     HWND hStatic = GetDlgItem(hDlg, IDC_STATIC_IMG);
     if (!hStatic) return false;
-    ShowWindow(hStatic, SW_HIDE);
 
     RECT rc;
     GetWindowRect(hStatic, &rc);
@@ -842,6 +971,19 @@ bool initCoverRenderer(HWND hDlg)
 
     int w = rc.right - rc.left, h = rc.bottom - rc.top;
     if (w <= 0 || h <= 0) return false;
+
+    const int coverSide = (std::min)(w, h);
+    if (w != coverSide || h != coverSide) {
+        if (!SetWindowPos(hStatic, nullptr, 0, 0, coverSide, coverSide,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE)) {
+            return false;
+        }
+        w = coverSide;
+        h = coverSide;
+        rc.right = rc.left + coverSide;
+        rc.bottom = rc.top + coverSide;
+    }
+    ShowWindow(hStatic, SW_HIDE);
 
     // Создаём SDL окно один раз
     gWindow = SDL_CreateWindow("", rc.left, rc.top, w, h,
@@ -888,9 +1030,10 @@ bool initCoverRenderer(HWND hDlg)
 		gWindow = nullptr;
         return false;
     }
-    gTexture = SDL_CreateTextureFromSurface(gRenderer, surf);
+    const SDL_Rect contentRect = DetectCoverContentRect(surf);
+    SDL_Texture* initialTexture = SDL_CreateTextureFromSurface(gRenderer, surf);
     SDL_FreeSurface(surf);
-    if (!gTexture) {
+    if (!initialTexture) {
         // ошибка
         SDL_DestroyRenderer(gRenderer);
         SDL_DestroyWindow(gWindow);
@@ -898,6 +1041,8 @@ bool initCoverRenderer(HWND hDlg)
 		gWindow = nullptr;
         return false;
     }
+    gTexture = initialTexture;
+    gCoverContentRect = contentRect;
 
     return true;
 }
@@ -920,6 +1065,7 @@ bool reloadCoverTexture()
         return false;
     }
 
+    const SDL_Rect newContentRect = DetectCoverContentRect(surf);
     SDL_Texture* newTexture = SDL_CreateTextureFromSurface(gRenderer, surf);
     SDL_FreeSurface(surf);
 
@@ -932,6 +1078,7 @@ bool reloadCoverTexture()
         SDL_DestroyTexture(gTexture);
     }
     gTexture = newTexture;
+    gCoverContentRect = newContentRect;
 
     return true;
 }
@@ -984,16 +1131,37 @@ bool redrawCoverImage(HWND hDlg)
             curRc.left != rc.left || curRc.top != rc.top ||
             curRc.right - curRc.left != drawW || curRc.bottom - curRc.top != drawH;
 
+        int sdlWindowW = 0;
+        int sdlWindowH = 0;
+        SDL_GetWindowSize(gWindow, &sdlWindowW, &sdlWindowH);
+        const bool needsSdlResize = sdlWindowW != drawW || sdlWindowH != drawH;
+
+        if (needsSdlResize) {
+            SDL_SetWindowSize(gWindow, drawW, drawH);
+        }
+
         if (needsMoveOrResize) {
             SetWindowPos(sdlHwnd, HWND_TOP, rc.left, rc.top, drawW, drawH,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
-            // Даём SDL время обработать изменение размера
-            SDL_PumpEvents();
         }
         else {
             SetWindowPos(sdlHwnd, HWND_TOP, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
+
+        if (needsMoveOrResize || needsSdlResize) {
+            SDL_PumpEvents();
+        }
+    }
+
+    int rendererW = 0;
+    int rendererH = 0;
+    if (SDL_GetRendererOutputSize(gRenderer, &rendererW, &rendererH) != 0 ||
+        rendererW <= 0 || rendererH <= 0) {
+        return false;
+    }
+    if (SDL_RenderSetViewport(gRenderer, nullptr) != 0) {
+        return false;
     }
 
     // Размеры текстуры
@@ -1003,30 +1171,24 @@ bool redrawCoverImage(HWND hDlg)
         return false;
     }
 
+    SDL_Rect srcRect = gCoverContentRect;
+    if (srcRect.x < 0 || srcRect.y < 0 || srcRect.w <= 0 || srcRect.h <= 0 ||
+        srcRect.x + srcRect.w > texW || srcRect.y + srcRect.h > texH) {
+        srcRect = { 0, 0, texW, texH };
+    }
+
     // Центральный кроп
-    SDL_Rect srcRect = { 0, 0, texW, texH };
-    if (texW > texH) {
-        srcRect.x = (texW - texH) / 2;
-        srcRect.w = texH;
+    if (srcRect.w > srcRect.h) {
+        srcRect.x += (srcRect.w - srcRect.h) / 2;
+        srcRect.w = srcRect.h;
     }
-    else if (texH > texW) {
-        srcRect.y = (texH - texW) / 2;
-        srcRect.h = texW;
+    else if (srcRect.h > srcRect.w) {
+        srcRect.y += (srcRect.h - srcRect.w) / 2;
+        srcRect.h = srcRect.w;
     }
 
-    // Расчёт dstRect с сохранением аспекта
-    float texAspect = static_cast<float>(srcRect.w) / static_cast<float>(srcRect.h);
-    float wndAspect = static_cast<float>(drawW) / static_cast<float>(drawH);
-
-    SDL_Rect dstRect = { 0, 0, drawW, drawH }; // по умолчанию — fill
-    if (texAspect > wndAspect) {
-        dstRect.h = static_cast<int>(drawW / texAspect + 0.5f);
-        dstRect.y = (drawH - dstRect.h) / 2;
-    }
-    else if (texAspect < wndAspect) {
-        dstRect.w = static_cast<int>(drawH * texAspect + 0.5f);
-        dstRect.x = (drawW - dstRect.w) / 2;
-    }
+    // srcRect is square; cover the complete near-square renderer without a one-pixel offset.
+    SDL_Rect dstRect = { 0, 0, rendererW, rendererH };
 
     // Отрисовка
     COLORREF bg = GetSysColor(COLOR_3DFACE);
@@ -1049,6 +1211,7 @@ void cleanupSDL() {
         SDL_DestroyTexture(gTexture);
         gTexture = NULL;
     }
+    gCoverContentRect = { 0, 0, 0, 0 };
     if (gRenderer) {
         SDL_DestroyRenderer(gRenderer);
         gRenderer = NULL;
@@ -1394,9 +1557,7 @@ int init_audio_filter_graph(
     int ret = 0;
     AVFilterContext* abuf = nullptr;
     AVFilterContext* preHeadroom = nullptr;
-    AVFilterContext* aeq = nullptr;
-    AVFilterContext* aeq0 = nullptr;
-    AVFilterContext* aeqMid = nullptr;
+    AVFilterContext* eqFilters[kParametricEqBandCount] = {};
     AVFilterContext* bass = nullptr;
     AVFilterContext* treble = nullptr;
     AVFilterContext* lnorm = nullptr;
@@ -1412,8 +1573,6 @@ int init_audio_filter_graph(
     // Get filters
     const AVFilter* f_abuffer = avfilter_get_by_name("abuffer");
     const AVFilter* f_equalizer = avfilter_get_by_name("equalizer");
-    const AVFilter* f_equalizer0 = avfilter_get_by_name("equalizer");
-    const AVFilter* f_equalizerMid = avfilter_get_by_name("equalizer");
     const AVFilter* f_bass = avfilter_get_by_name("bass");
     const AVFilter* f_treble = avfilter_get_by_name("treble");
     const AVFilter* f_lnorm = avfilter_get_by_name("loudnorm");
@@ -1425,13 +1584,9 @@ int init_audio_filter_graph(
         return AVERROR_FILTER_NOT_FOUND;
     }
 
-    // Инициализация параметров эквалайзера внутри функции
-    float eq_freq = 14000.0f;
-    float eq_q = 1.0f;
-    float eq_gain_db = current_eq_gain.load();
-
     current_volume.store(volume_start);
-    current_eq_gain.store(eq_gain_db);
+    current_eq_gain_bass.store(g_parametricEqGainDb[0].load());
+    current_eq_gain.store(g_parametricEqGainDb[kParametricEqBandCount - 1].load());
 
     AVChannelLayout input_layout = {};
     if (av_channel_layout_from_mask(&input_layout, channel_layout) >= 0) {
@@ -1466,36 +1621,21 @@ int init_audio_filter_graph(
         return ret;
     }
 
-    // Create equalizer argument string
-    snprintf(eq_args, sizeof(eq_args), "f=%.1f:width_type=q:w=%.2f:g=%.1f",
-        eq_freq, eq_q, eq_gain_db);
-    // Create equalizer filter
-    ret = avfilter_graph_create_filter(&aeq, f_equalizer, "eq", eq_args, nullptr, graph);
-    if (ret < 0) {
-        OutputDebugStringA(av_error_string(ret).c_str());
-        return ret;
-    }
+    for (int band = 0; band < kParametricEqBandCount; ++band) {
+        char filterName[16] = {};
+        snprintf(filterName, sizeof(filterName), "peq%d", band);
+        snprintf(eq_args, sizeof(eq_args), "f=%.1f:width_type=q:w=%.3f:g=%.2f",
+            g_parametricEqFrequenciesHz[band],
+            g_parametricEqQ[band].load(),
+            g_parametricEqGainDb[band].load());
 
-    FillMemory(eq_args, sizeof(eq_args), 0);
+        ret = avfilter_graph_create_filter(&eqFilters[band], f_equalizer, filterName, eq_args, nullptr, graph);
+        if (ret < 0) {
+            OutputDebugStringA(av_error_string(ret).c_str());
+            return ret;
+        }
 
-    // Create equalizer0 argument string
-    snprintf(eq_args, sizeof(eq_args), "f=30:width_type=q:w=0.8:g=%f", current_eq_gain_bass.load());
-    // Create equalizer0 filter
-    ret = avfilter_graph_create_filter(&aeq0, f_equalizer0, "eq0", eq_args, nullptr, graph);
-    if (ret < 0) {
-        OutputDebugStringA(av_error_string(ret).c_str());
-        return ret;
-    }
-
-    FillMemory(eq_args, sizeof(eq_args), 0);
-
-    // Create equalizerMid argument string
-    snprintf(eq_args, sizeof(eq_args), "f=9200:width_type=q:w=1.4:g=4.0");
-    // Create equalizerMid filter
-    ret = avfilter_graph_create_filter(&aeqMid, f_equalizerMid, "eqMid", eq_args, nullptr, graph);
-    if (ret < 0) {
-        OutputDebugStringA(av_error_string(ret).c_str());
-        return ret;
+        FillMemory(eq_args, sizeof(eq_args), 0);
     }
 	// Create bass filter
     ret = avfilter_graph_create_filter(&bass, f_bass, "bassFx", "g=1.0", nullptr, graph);
@@ -1529,29 +1669,22 @@ int init_audio_filter_graph(
         OutputDebugStringA(av_error_string(ret).c_str());
         return ret;
     }
-    // Link filters in chain: in -> preHeadroom -> aeq -> aeqMid -> aeq0 -> bass -> treble -> makeup -> vol -> out
+    // Link filters in chain: in -> preHeadroom -> peq0..peq4 -> bass -> treble -> makeup -> vol -> out
 	//+preHeadroom
     if ((ret = avfilter_link(abuf, 0, preHeadroom, 0)) < 0) {
         OutputDebugStringA(av_error_string(ret).c_str());
         return ret;
     }
-	//+eq
-    if ((ret = avfilter_link(preHeadroom, 0, aeq, 0)) < 0) {
-        OutputDebugStringA(av_error_string(ret).c_str());
-        return ret;
-    }
-	//+eqMid
-    if ((ret = avfilter_link(aeq, 0, aeqMid, 0)) < 0) {
-        OutputDebugStringA(av_error_string(ret).c_str());
-        return ret;
-    }
-	//+eq0
-    if ((ret = avfilter_link(aeqMid, 0, aeq0, 0)) < 0) {
-        OutputDebugStringA(av_error_string(ret).c_str());
-        return ret;
+    AVFilterContext* previous = preHeadroom;
+    for (int band = 0; band < kParametricEqBandCount; ++band) {
+        if ((ret = avfilter_link(previous, 0, eqFilters[band], 0)) < 0) {
+            OutputDebugStringA(av_error_string(ret).c_str());
+            return ret;
+        }
+        previous = eqFilters[band];
     }
 	//+bass 
-    if ((ret = avfilter_link(aeq0, 0, bass, 0)) < 0) {
+    if ((ret = avfilter_link(previous, 0, bass, 0)) < 0) {
         OutputDebugStringA(av_error_string(ret).c_str());
         return ret;
     }
@@ -1584,7 +1717,7 @@ int init_audio_filter_graph(
 
     // Return created filter contexts
     if (out_abuf) *out_abuf = abuf;
-    if (out_aeq) *out_aeq = aeq;
+    if (out_aeq) *out_aeq = eqFilters[0];
     if (out_avol) *out_avol = avol;
     if (out_asink) *out_asink = asink;
 
@@ -1602,6 +1735,7 @@ static std::string rational_to_string(const AVRational& r) {
 
 std::string oldssout = "";
 static int g_displayedCodecparKbit = 0;
+
 void print_and_check_all_metadata(AVFormatContext* fmt, std::string& out) {
     
     if (!fmt) return;
@@ -1942,6 +2076,8 @@ void update_stream_metadata() {
     remove_patterns(meta, patterns, true); // true — удалить все вхождения
 	// заменяем " ," на " - "
     replace_all(meta, " ,", " - ");
+    // заменяем "[," на "["
+	replace_all(meta, "[,", "[");
 
     oldmeta = meta;
     meta = decode_icy_metadata(meta);
@@ -2945,9 +3081,11 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                         else {
                             ResetLimiterGainRider(false);
                         }
-						FinalLimiterActivity limiter_activity = ApplyFinalLimiter(audio_data, total_samples, kFinalLimiterLimit);// 0.97 - оставляем небольшой запас от полного клиппинга для более мягкого звучания
+                        FinalLimiterActivity limiter_activity = ApplyFinalLimiter(audio_data, total_samples, kFinalLimiterLimit);// 0.97 - оставляем небольшой запас от полного клиппинга для более мягкого звучания
                         if (g_enableLimiterGainRider) {
-                            UpdateLimiterGainRider(limiter_activity, total_samples);
+                            UpdateLimiterGainRider(limiter_activity, total_samples,
+                                static_cast<size_t>(converted_count),
+                                static_cast<int>(pwfx->nSamplesPerSec));
                         }
                
                         int samples_written = 0;
@@ -3481,9 +3619,6 @@ void UpdateFilterSettings() {
     if (!filterGraph) return;
 
     float volume = current_volume.load();
-    float eq_gain = current_eq_gain.load();
-    float eq_gain_bass = current_eq_gain_bass.load();
-
     // Update volume - pass only numeric value
     char vol_str[32];
     snprintf(vol_str, sizeof(vol_str), "%.2f", volume); // Only number, without "volume="
@@ -3492,20 +3627,23 @@ void UpdateFilterSettings() {
         //LogToUI("Error changing volume: " + av_error_string(ret));
     }
 
-    // Update equalizer
-    char gain_str[32];
-    snprintf(gain_str, sizeof(gain_str), "%f", eq_gain);
-    ret = avfilter_graph_send_command(filterGraph, "eq", "g", gain_str, nullptr, 0, 0);
-    if (ret < 0) {
-        //LogToUI("Error changing equalizer: " + av_error_string(ret));
-    }
+    for (int band = 0; band < kParametricEqBandCount; ++band) {
+        char target[16] = {};
+        snprintf(target, sizeof(target), "peq%d", band);
 
-    // Update equalizer bass
-    char gain_str_bass[32];
-    snprintf(gain_str_bass, sizeof(gain_str_bass), "%f", eq_gain_bass);
-    ret = avfilter_graph_send_command(filterGraph, "eq0", "g", gain_str_bass, nullptr, 0, 0);
-    if (ret < 0) {
-        //LogToUI("Error changing equalizer bass: " + av_error_string(ret));
+        char gain_str[32] = {};
+        snprintf(gain_str, sizeof(gain_str), "%.3f", g_parametricEqGainDb[band].load());
+        ret = avfilter_graph_send_command(filterGraph, target, "g", gain_str, nullptr, 0, 0);
+        if (ret < 0) {
+            //LogToUI("Error changing equalizer gain: " + av_error_string(ret));
+        }
+
+        char q_str[32] = {};
+        snprintf(q_str, sizeof(q_str), "%.3f", g_parametricEqQ[band].load());
+        ret = avfilter_graph_send_command(filterGraph, target, "w", q_str, nullptr, 0, 0);
+        if (ret < 0) {
+            //LogToUI("Error changing equalizer Q: " + av_error_string(ret));
+        }
     }
 }
 

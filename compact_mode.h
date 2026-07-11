@@ -9,6 +9,7 @@ struct CompactModeCallbacks {
     std::wstring (*getTitleText)() = nullptr;
     void (*refreshTooltips)(HWND hDlg) = nullptr;
     void (*invalidateNormalText)(HWND hDlg) = nullptr;
+    void (*showContextMenu)(HWND hDlg, POINT pt) = nullptr;
 };
 
 void CompactModeConfigure(

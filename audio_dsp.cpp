@@ -1,6 +1,7 @@
 #include "audio_dsp.h"
 #include "IRPFFmpeg.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -65,7 +66,9 @@ struct Biquad {
 };
 
 constexpr int LUFS_NORMALIZER_MAX_CHANNELS = 8;
-constexpr size_t LUFS_NORMALIZER_MAX_BLOCKS = 150;
+/*120 sec*/
+constexpr size_t LUFS_NORMALIZER_MAX_BLOCKS = 300;
+constexpr size_t LUFS_NORMALIZER_FAST_BLOCKS = 3;
 constexpr float g_referenceLufs = -9.00f;
 
 struct LufsBlock {
@@ -86,9 +89,13 @@ struct LufsGainNormalizerState {
     float desired_gain_db = 0.0f;
     float smoothed_gain_db = 0.0f;
     bool allow_gain_increase = true;
+    size_t fast_block_pos = 0;
+    size_t fast_block_count = 0;
+    float fast_lufs = -std::numeric_limits<float>::infinity();
     Biquad prefilter[LUFS_NORMALIZER_MAX_CHANNELS];
     Biquad rlb_highpass[LUFS_NORMALIZER_MAX_CHANNELS];
     LufsBlock blocks[LUFS_NORMALIZER_MAX_BLOCKS];
+    LufsBlock fast_blocks[LUFS_NORMALIZER_FAST_BLOCKS];
 };
 
 LufsGainNormalizerState g_lufs_normalizer;
@@ -164,21 +171,6 @@ void InitLufsGainNormalizerState(int channels, int sample_rate)
     }
 }
 
-double LufsChannelWeight(int ch, int channels)
-{
-    if (channels > 3 && ch >= 3) {
-        return 1.41;
-    }
-    return 1.0;
-}
-
-float ClampFloat(float value, float min_value, float max_value)
-{
-    if (value < min_value) return min_value;
-    if (value > max_value) return max_value;
-    return value;
-}
-
 double MeanSquareToLufs(double mean_square)
 {
     return (mean_square > 0.0)
@@ -188,7 +180,7 @@ double MeanSquareToLufs(double mean_square)
 
 // Recomputes current_lufs / desired_gain_db from the ring buffer using the
 // same two-stage gating scheme as EBU R128 Integrated Loudness, just applied
-// to a rolling ~60s window instead of a whole programme:
+// to a rolling ~120s window instead of a whole programme:
 //   1) "ungated" mean over everything currently buffered (each block already
 //      passed the absolute -70 LUFS gate on the way in, see PushLufsNormalizerBlock)
 //   2) relative gate: drop any block more than 10 LU quieter than that
@@ -240,7 +232,7 @@ void RecomputeGatedLufs()
         gated_frames = ungated_frames;
     }
 
-    constexpr uint64_t kMinAnalysisMs = 3000;
+    constexpr uint64_t kMinAnalysisMs = 1200;
     const uint64_t min_frames =
         static_cast<uint64_t>(st.sample_rate) * kMinAnalysisMs / 1000ULL;
     if (gated_frames < min_frames) {
@@ -251,7 +243,7 @@ void RecomputeGatedLufs()
         MeanSquareToLufs(gated_energy / static_cast<double>(gated_frames));
     st.current_lufs = static_cast<float>(gated_lufs);
     st.desired_gain_db =
-        ClampFloat(g_referenceLufs - st.current_lufs, -12.0f, 8.0f);
+        std::clamp(g_referenceLufs - st.current_lufs, -12.0f, 8.0f);
 }
 
 void PushLufsNormalizerBlock(double energy_sum, uint64_t frames)
@@ -275,21 +267,45 @@ void PushLufsNormalizerBlock(double energy_sum, uint64_t frames)
     const double block_mean_square = energy_sum / static_cast<double>(frames);
     const double block_lufs = MeanSquareToLufs(block_mean_square);
 
-    g_lufs_normalizer.allow_gain_increase = (block_lufs >= kQuietGuardLufs);
+    LufsGainNormalizerState& st = g_lufs_normalizer;
+    st.allow_gain_increase = (block_lufs >= kQuietGuardLufs);
 
-    if (block_lufs < kAbsoluteGateLufs) {
+    // Keep a separate 800 ms rolling measurement for fast protection. It is
+    // deliberately independent of the absolute gate and never rewrites the
+    // 120 s station history. Silence therefore lowers this estimate instead
+    // of leaving a stale loud block active.
+    LufsBlock& fast_slot = st.fast_blocks[st.fast_block_pos];
+    fast_slot.energy = energy_sum;
+    fast_slot.frames = frames;
+    if (st.fast_block_count < LUFS_NORMALIZER_FAST_BLOCKS) {
+        ++st.fast_block_count;
+    }
+    st.fast_block_pos =
+        (st.fast_block_pos + 1) % LUFS_NORMALIZER_FAST_BLOCKS;
+
+    double fast_energy = 0.0;
+    uint64_t fast_frames = 0;
+    for (size_t i = 0; i < st.fast_block_count; ++i) {
+        fast_energy += st.fast_blocks[i].energy;
+        fast_frames += st.fast_blocks[i].frames;
+    }
+    st.fast_lufs = (fast_frames > 0)
+        ? static_cast<float>(MeanSquareToLufs(
+            fast_energy / static_cast<double>(fast_frames)))
+        : -std::numeric_limits<float>::infinity();
+
+    if (block_lufs <= kAbsoluteGateLufs) {
         return;
     }
 
-    LufsBlock& slot = g_lufs_normalizer.blocks[g_lufs_normalizer.block_pos];
-    if (g_lufs_normalizer.block_count < LUFS_NORMALIZER_MAX_BLOCKS) {
-        ++g_lufs_normalizer.block_count;
+    LufsBlock& slot = st.blocks[st.block_pos];
+    if (st.block_count < LUFS_NORMALIZER_MAX_BLOCKS) {
+        ++st.block_count;
     }
 
     slot.energy = energy_sum;
     slot.frames = frames;
-    g_lufs_normalizer.block_pos =
-        (g_lufs_normalizer.block_pos + 1) % LUFS_NORMALIZER_MAX_BLOCKS;
+    st.block_pos = (st.block_pos + 1) % LUFS_NORMALIZER_MAX_BLOCKS;
 
     RecomputeGatedLufs();
 }
@@ -415,12 +431,12 @@ void ResetRealtimeAudioDspState()
     ResetExciterState();
     ResetDeepBassState();
 }
-
 void AnalyzeLufsGainNormalizer(const float* buffer, size_t frames, int channels, int sample_rate)
 {
     if (!buffer || frames == 0 || channels <= 0 || sample_rate <= 0) {
         return;
     }
+
     if (g_lufs_normalizer.sample_rate != sample_rate ||
         g_lufs_normalizer.channels != channels) {
         InitLufsGainNormalizerState(channels, sample_rate);
@@ -442,7 +458,8 @@ void AnalyzeLufsGainNormalizer(const float* buffer, size_t frames, int channels,
 
             double filtered = g_lufs_normalizer.prefilter[ch].Process(sample);
             filtered = g_lufs_normalizer.rlb_highpass[ch].Process(filtered);
-            frame_energy += LufsChannelWeight(ch, channels) * filtered * filtered;
+            const double channel_weight = (channels > 3 && ch >= 3) ? 1.41 : 1.0;
+            frame_energy += channel_weight * filtered * filtered;
         }
 
         g_lufs_normalizer.block_energy_sum += frame_energy;
@@ -457,6 +474,7 @@ void AnalyzeLufsGainNormalizer(const float* buffer, size_t frames, int channels,
             g_lufs_normalizer.frames_in_block = 0;
         }
     }
+
 }
 
 void ApplyLufsGainNormalizer(float* buffer, size_t frames, int channels, int sample_rate)
@@ -472,23 +490,50 @@ void ApplyLufsGainNormalizer(float* buffer, size_t frames, int channels, int sam
     const float old_gain_db = g_lufs_normalizer.smoothed_gain_db;
     const float seconds = static_cast<float>(frames) / static_cast<float>(sample_rate);
     float target_gain_db = g_lufs_normalizer.desired_gain_db;
+
+    constexpr float kFastGuardTriggerMarginLu = 3.0f;
+    constexpr float kFastGuardOutputMarginLu = 3.0f;
+    bool fast_guard_active = false;
+    if (target_gain_db > 0.0f && std::isfinite(g_lufs_normalizer.fast_lufs)) {
+        const float unguarded_output_lufs =
+            g_lufs_normalizer.fast_lufs + target_gain_db;
+        if (unguarded_output_lufs >
+            g_referenceLufs + kFastGuardTriggerMarginLu) {
+            const float fast_gain_ceiling_db = std::clamp(
+                g_referenceLufs + kFastGuardOutputMarginLu -
+                    g_lufs_normalizer.fast_lufs,
+                -12.0f,
+                8.0f);
+            if (fast_gain_ceiling_db < target_gain_db) {
+                target_gain_db = fast_gain_ceiling_db;
+                fast_guard_active = true;
+            }
+        }
+    }
+
     if (target_gain_db > old_gain_db && !g_lufs_normalizer.allow_gain_increase) {
         target_gain_db = old_gain_db;
     }
 
     const float diff_db = target_gain_db - old_gain_db;
-    const float slew_db_per_sec = (diff_db > 0.0f) ? 0.25f : 0.50f;
-    const float max_step_db = slew_db_per_sec * seconds;
 
-    if (diff_db > max_step_db) {
-        g_lufs_normalizer.smoothed_gain_db += max_step_db;
+    constexpr float kGainRiseTimeConstantSec = 4.0f;
+    constexpr float kGainFallTimeConstantSec = 4.0f;
+    constexpr float kFastGuardFallTimeConstantSec = 0.5f;
+
+    float tau_sec = kGainFallTimeConstantSec;
+    if (diff_db > 0.0f) {
+        tau_sec = kGainRiseTimeConstantSec;
     }
-    else if (diff_db < -max_step_db) {
-        g_lufs_normalizer.smoothed_gain_db -= max_step_db;
+    else if (fast_guard_active) {
+        tau_sec = kFastGuardFallTimeConstantSec;
     }
-    else {
-        g_lufs_normalizer.smoothed_gain_db = target_gain_db;
-    }
+
+    // Exponential smoothing: new = target + (old - target) * exp(-dt / tau).
+    const float coeff = expf(-seconds / tau_sec);
+
+    g_lufs_normalizer.smoothed_gain_db =
+        target_gain_db + (old_gain_db - target_gain_db) * coeff;
 
     const float new_gain_db = g_lufs_normalizer.smoothed_gain_db;
     const float old_gain = std::pow(10.0f, old_gain_db / 20.0f);
@@ -903,40 +948,52 @@ void ResetLimiterGainRider(bool postStatus)
     }
 }
 
-void UpdateLimiterGainRider(const FinalLimiterActivity& activity, int total_samples)
+void UpdateLimiterGainRider(const FinalLimiterActivity& activity, int total_samples,
+    size_t frames, int sample_rate)
 {
     if (!g_enableLimiterGainRider) {
         g_limiterGainRiderGain = 1.0f;
         return;
     }
 
-    if (total_samples <= 0) {
+    if (total_samples <= 0 || frames == 0 || sample_rate <= 0) {
         return;
     }
 
-    constexpr float kMinRiderGain = 0.70f;
-    constexpr float kStrongAttackMultiplier = 0.99f;
-    constexpr float kSoftAttackMultiplier = 0.995f;
-    constexpr float kReleaseCoeff = 0.0015f;
+    // GainRider is the post-effects feedback loop for the final limiter. Its
+    // timing must depend on elapsed audio time, not on how many decoder frames
+    // happened to arrive in one callback. These time constants preserve the
+    // previous response around a typical 1152-frame/48 kHz stream while making
+    // MP3, AAC and FLAC converge at the same rate.
+    constexpr float kMinRiderGain = 0.25f;
+    constexpr float kStrongAttackTimeConstantSec = 2.4f;
+    constexpr float kSoftAttackTimeConstantSec = 4.8f;
+    constexpr float kReleaseTimeConstantSec = 16.0f;
     constexpr float kSoftLimitedRatioForAttack = 0.08f;
 
+    const float seconds = static_cast<float>(frames) / static_cast<float>(sample_rate);
     const float soft_limited_ratio =
         static_cast<float>(activity.softLimitedSamples) / static_cast<float>(total_samples);
 
     if (activity.overLimitSamples > 0) {
-        g_limiterGainRiderGain *= kStrongAttackMultiplier;
+        g_limiterGainRiderGain *=
+            expf(-seconds / kStrongAttackTimeConstantSec);
         if (g_limiterGainRiderGain < kMinRiderGain) {
             g_limiterGainRiderGain = kMinRiderGain;
         }
     }
     else if (soft_limited_ratio > kSoftLimitedRatioForAttack) {
-        g_limiterGainRiderGain *= kSoftAttackMultiplier;
+        g_limiterGainRiderGain *=
+            expf(-seconds / kSoftAttackTimeConstantSec);
         if (g_limiterGainRiderGain < kMinRiderGain) {
             g_limiterGainRiderGain = kMinRiderGain;
         }
     }
     else if (g_limiterGainRiderGain < 1.0f) {
-        g_limiterGainRiderGain += (1.0f - g_limiterGainRiderGain) * kReleaseCoeff;
+        const float release_coeff =
+            1.0f - expf(-seconds / kReleaseTimeConstantSec);
+        g_limiterGainRiderGain +=
+            (1.0f - g_limiterGainRiderGain) * release_coeff;
         if (g_limiterGainRiderGain > 0.9999f) {
             g_limiterGainRiderGain = 1.0f;
         }

@@ -32,7 +32,7 @@ static bool is_image_url_valid(const std::wstring& url)
         return false;
 
     // Set timeouts
-    DWORD timeout = 1000;
+    DWORD timeout = 2000;
     InternetSetOption(hInternet, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
     InternetSetOption(hInternet, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
     InternetSetOption(hInternet, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
@@ -468,7 +468,12 @@ static const wchar_t* CURRENT_COVER_FILE = L"cover_cache\\cover.jpg";
 static bool TryBingImages(const std::wstring& trackName)
 {        
     std::string encoded = url_encode(wstring_to_utf8(trackName));
-    std::string url = "https://www.bing.com/images/search?q=song%20cover%20" + encoded + "&form=HDRSC3&first=1&qft=+filterui:aspect-square";
+
+    /*std::string url = "https://www.bing.com/images/search?q=song%20cover%20" + encoded + "&form=HDRSC3&first=1&qft=+filterui:aspect-square";*/
+
+    std::string url = "https://www.bing.com/images/search?q=song%20cover%20"
+        + encoded +
+        "%20-site:youtube.com%20-site:pinterest.com&form=HDRSC3&first=1&qft=+filterui:aspect-square";
 
     //LogToUI("BingImages for url: " + url);
 
@@ -542,6 +547,7 @@ static bool TryBingImages(const std::wstring& trackName)
         if (decodedUrlW.find(L"youtube.com") != std::wstring::npos) { pos++; continue; }
         if (decodedUrlW.find(L"archive.org") != std::wstring::npos) { pos++; continue; }
         if (decodedUrlW.find(L"bing.com") != std::wstring::npos) { pos++; continue; }
+        if (decodedUrlW.find(L"musik-sammler.de") != std::wstring::npos) { pos++; continue; }
 
         //LogToUI(wstring_to_utf8(decodedUrlW));
 

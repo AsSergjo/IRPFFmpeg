@@ -148,6 +148,7 @@
     <ClInclude Include="audio_dsp.h" />
     <ClInclude Include="compact_mode.h" />
     <ClInclude Include="cover_art.h" />
+    <ClInclude Include="eq_window.h" />
     <ClInclude Include="file_recording.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="IRPFFmpeg.h" />
@@ -161,6 +162,7 @@
     <ClCompile Include="audio_dsp.cpp" />
     <ClCompile Include="compact_mode.cpp" />
     <ClCompile Include="cover_art.cpp" />
+    <ClCompile Include="eq_window.cpp" />
     <ClCompile Include="file_recording.cpp" />
     <ClCompile Include="IRPFFmpeg.cpp" />
     <ClCompile Include="language_manager.cpp" />

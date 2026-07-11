@@ -21,9 +21,6 @@
 #define IDC_BUTTON_PP                   1004
 #define IDC_BUTTON_REV                  1005
 #define IDC_BUTTON_FORV                 1006
-#define IDC_SLIDER_VOL                  1007
-#define IDC_SLIDER_BASS                 1008
-#define IDC_SLIDER_HI                   1009
 #define IDC_BUTTON_REC                  1010
 #define IDC_ST_SETTING                  1011
 #define IDC_CHECK_MP3                   1012
@@ -52,6 +49,9 @@
 #define IDC_BUTTON_COMPACT_RESTORE      1036
 #define IDC_BUTTON_COMPACT_PREVIOUS     1037
 #define IDC_CHECK_COMPACT_ALWAYS_ON_TOP 1038
+#define IDC_ABOUT_GITHUB                1039
+#define IDC_BUTTON_VOLUME               1040
+#define IDC_BUTTON_EQ                   1041
 #define ID_LISTBOX_COPY                 32771
 #define ID_LIST_URL_DELETE_STATION      32772
 #define ID_LIST_URL_ADD_STATION         32773
@@ -66,7 +66,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        132
 #define _APS_NEXT_COMMAND_VALUE         32777
-#define _APS_NEXT_CONTROL_VALUE         1039
+#define _APS_NEXT_CONTROL_VALUE         1042
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

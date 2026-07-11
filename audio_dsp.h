@@ -19,4 +19,5 @@ void ProcessExciter(float* buffer, size_t frames, int channels, int sample_rate,
 void ApplyLimiterGainRider(float* audio_data, int total_samples);
 FinalLimiterActivity ApplyFinalLimiter(float* audio_data, int total_samples, float limit);
 void ResetLimiterGainRider(bool postStatus = true);
-void UpdateLimiterGainRider(const FinalLimiterActivity& activity, int total_samples);
+void UpdateLimiterGainRider(const FinalLimiterActivity& activity, int total_samples,
+    size_t frames, int sample_rate);

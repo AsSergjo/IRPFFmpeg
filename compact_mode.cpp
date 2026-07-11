@@ -158,6 +158,18 @@ static bool IsCompactTitleDoubleClick(HWND hWnd, LPARAM lParam)
     return isDoubleClick;
 }
 
+static POINT GetCompactContextMenuPoint(HWND hWnd, LPARAM lParam)
+{
+    POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+    if (pt.x == -1 && pt.y == -1) {
+        RECT rc = {};
+        GetWindowRect(hWnd, &rc);
+        pt.x = rc.left + (rc.right - rc.left) / 2;
+        pt.y = rc.top + (rc.bottom - rc.top) / 2;
+    }
+    return pt;
+}
+
 static LRESULT CALLBACK CompactTitleSubclassProc(
     HWND hWnd,
     UINT msg,
@@ -182,6 +194,13 @@ static LRESULT CALLBACK CompactTitleSubclassProc(
         }
         CompactModeBeginDrag(GetParent(hWnd));
         return 0;
+
+    case WM_CONTEXTMENU:
+        if (g_callbacks.showContextMenu) {
+            g_callbacks.showContextMenu(GetParent(hWnd), GetCompactContextMenuPoint(hWnd, lParam));
+            return 0;
+        }
+        break;
 
     case WM_NCDESTROY:
         RemoveWindowSubclass(hWnd, CompactTitleSubclassProc, subclassId);
@@ -296,9 +315,8 @@ static void SaveNormalControlLayout(HWND hDlg)
         IDC_BUTTON_REV,
         IDC_BUTTON_FORV,
         IDC_BUTTON_PREVIOUS_STATION,
-        IDC_SLIDER_VOL,
-        IDC_SLIDER_BASS,
-        IDC_SLIDER_HI,
+        IDC_BUTTON_VOLUME,
+        IDC_BUTTON_EQ,
         IDC_BUTTON_REC,
         IDC_ST_SETTING
     };

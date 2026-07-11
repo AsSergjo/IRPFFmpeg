@@ -4,12 +4,16 @@
 #include "IRPFFmpeg.h"
 #include "compact_mode.h"
 #include "cover_art.h"
+#include "eq_window.h"
 #include "file_recording.h"
 #include "language_manager.h"
 #include "resource.h"
 
 #include <windowsx.h> 
 #include <commctrl.h> 
+#include <shellapi.h>
+#include <algorithm>
+#include <cmath>
 #include <vector>
 #include <string>
 #include <memory>
@@ -29,7 +33,7 @@
 #include <uxtheme.h>
 #include <dwmapi.h>
 #include <shlwapi.h> // Для PathCombine
-#include <shellapi.h>
+#include <gdiplus.h>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "comctl32.lib")
@@ -38,6 +42,7 @@
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "msimg32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "gdiplus.lib")
 
 const int MAX_RECONNECT_ATTEMPTS = 3;
 const int RECONNECT_DELAY_MS = 2000;
@@ -51,7 +56,7 @@ static constexpr UINT kTrayIconId = 1;
 static constexpr int kTrackToastSize = 300;
 static constexpr int kTrackToastMargin = 18;
 static constexpr BYTE kTrackToastLayeredAlpha = 255;
-static constexpr UINT kTrackToastHideDelayMs = 3000;
+static constexpr UINT kTrackToastHideDelayMs = 5000;
 static const wchar_t TRACK_TOAST_CLASS[] = L"IRPFFmpegTrackToast";
 static const wchar_t TRACK_TOAST_TEXT_CLASS[] = L"IRPFFmpegTrackToastText";
 // ------------------------------- 
@@ -64,9 +69,12 @@ HWND g_hHistory = NULL;
 HWND g_hStatic = NULL;
 HBRUSH g_hbrBlack = nullptr;
 HWND g_hBtnPlayPause, g_hBtnStop, g_hBtnOpen, g_hBtnPrev, g_hBtnNext;
-HWND g_hSliderVolume, g_hSliderTreble, g_hSliderBass;
+HWND g_hVolumeButton;
 HWND g_hLabelVolume, g_hLabelTreble, g_hLabelBass;
 HWND g_hNowPlayingBar = NULL;
+static ULONG_PTR g_volumeGdiplusToken = 0;
+static const std::wstring kPlayIcon = L"▶ ";
+static const std::wstring kPlaylistPlayingIcon = L"\u29BF ";
 
 // ------------------------------- 
 // Global variables for Audio Logic
@@ -136,7 +144,6 @@ const int TITLE_HEIGHT = 0;
 extern const int alwaysVisibleExtent = 1024; // pixels
 extern const int maxVisibleExtent = 2048;    // pixels
 
-static HWND g_hSettingStatic = NULL;
 bool rec_is_flac = false;
 
 // Глобальный вектор для хранения плейлиста
@@ -1029,7 +1036,7 @@ static std::wstring GetNowPlayingBarText()
     if ((showStreamInfo || appendBadServerDataStatus || showLimiterStatus || showLufsStatus) &&
         running.load() &&
         !g_nowPlayingElapsed.empty()) {
-        barText = L"▷ ";
+        barText = kPlayIcon;//barText = L"▷ ";
         barText += g_nowPlayingElapsed;
     }
 
@@ -1264,10 +1271,9 @@ static void SetupMainDialogTooltips(HWND hDlg)
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_FORV), Tr("tooltip.next_station", L"Перейти к следующей станции в списке"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_PREVIOUS_STATION), Tr("tooltip.previous_station", L"Вернуться к ранее звучавшей станции"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_REC), Tr("tooltip.record", L"Начать или остановить запись текущего потока"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_VOLUME), Tr("tooltip.volume", L"Громкость"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_EQ), Tr("tooltip.equalizer", L"Открыть пятиполосный параметрический эквалайзер"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_ST_SETTING), Tr("tooltip.settings", L"Открыть настройки программы"));
-    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_SLIDER_BASS), Tr("tooltip.slider.bass", L"Низкие Частоты"));
-    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_SLIDER_HI), Tr("tooltip.slider.treble", L"Высокие Частоты"));
-    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_SLIDER_VOL), Tr("tooltip.slider.volume", L"Громкость"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_COMPACT_PREVIOUS), Tr("tooltip.previous_station", L"Вернуться к ранее звучавшей станции"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_COMPACT_RESTORE), Tr("tooltip.compact.restore", L"Вернуться в обычный режим"));
 }
@@ -1390,7 +1396,7 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
 
 void UpdatePlayingIndicator(int oldIndex, int newIndex) {
     HWND hListView = GetDlgItem(g_hMainWnd, IDC_LIST_URL);
-    const std::wstring playIcon = L"▶ ";
+    const std::wstring playIcon = kPlaylistPlayingIcon;
 
     // Remove icon from old item
     if (oldIndex != -1) {
@@ -1483,100 +1489,6 @@ void PlayAtIndex(int index, bool resetReconnect) {
    
 }
 
-static LRESULT CALLBACK SettingStaticSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
-    UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
-{
-    switch (msg)
-    {
-    case WM_MOUSEMOVE:
-    {
-        // Если ещё не в состоянии "hot", включаем трекинг и отмечаем состояние
-        if (!GetProp(hwnd, L"hot"))
-        {
-            SetProp(hwnd, L"hot", (HANDLE)1);
-            TRACKMOUSEEVENT tme = { sizeof(tme) };
-            tme.dwFlags = TME_LEAVE;
-            tme.hwndTrack = hwnd;
-            TrackMouseEvent(&tme);
-            InvalidateRect(hwnd, NULL, TRUE);
-        }
-        break;
-    }
-    case WM_MOUSELEAVE:
-    {
-        // Убираем "hot" и перерисовываем
-        RemoveProp(hwnd, L"hot");
-        InvalidateRect(hwnd, NULL, TRUE);
-        break;
-    }
-    case WM_LBUTTONDOWN:
-    {
-        // Перенаправляем клик родителю, чтобы сработал существующий обработчик IDC_ST_SETTING
-        SetFocus(hwnd);
-        return DefSubclassProc(hwnd, msg, wParam, lParam);
-    }
-    case WM_PAINT:
-    {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-
-        // Фон: подсвечиваем при hover
-        bool isHot = (GetProp(hwnd, L"hot") != nullptr);
-        //всегда перерисовываем фон
-        HBRUSH hBrush = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
-        FillRect(hdc, &rc, hBrush);
-        DeleteObject(hBrush);
-
-        if (hButtonFont)
-        {
-            HFONT hOld = (HFONT)SelectObject(hdc, hButtonFont);
-            COLORREF iconColor = isHot ? RGB(70, 130, 220) : RGB(100, 100, 100);
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, iconColor);
-
-            if (isHot) {
-
-                LOGFONT lf;
-                GetObject(hButtonFont, sizeof(LOGFONT), &lf);
-                lf.lfHeight = -MulDiv(22, GetDeviceCaps(hdc, LOGPIXELSY), 72); // Увеличиваем на 2 пункта
-                HFONT hBigFont = CreateFontIndirect(&lf);
-                SelectObject(hdc, hBigFont);
-                DrawTextW(hdc, L"\ue713", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                DeleteObject(hBigFont);
-
-            }
-            else {
-
-                DrawTextW(hdc, L"\ue713", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            }
-
-            SelectObject(hdc, hOld);
-        }
-        else
-        {
-            // fallback
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, RGB(100, 100, 100));
-            DrawTextW(hdc, L"⚙", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        }
-
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
-    case WM_DESTROY:
-    {
-        RemoveProp(hwnd, L"hot");
-        break;
-    }
-    default:
-        break;
-    }
-
-    return DefSubclassProc(hwnd, msg, wParam, lParam);
-}
-
 static void SetStationNameColumnWidth(HWND hListView)
 {
     if (!hListView) return;
@@ -1655,92 +1567,229 @@ static void SetMenuItemBitmapByCommand(HMENU hMenu, UINT commandId, HBITMAP hBit
     SetMenuItemInfoW(hMenu, commandId, FALSE, &mii);
 }
 
-static void PaintRoundedRect(HDC hdc, const RECT& rc, int radius, COLORREF fill, COLORREF outline)
+static bool IsVolumeButtonPointInside(HWND hwnd, LPARAM lParam)
 {
-    HBRUSH hBrush = CreateSolidBrush(fill);
-    HPEN hPen = CreatePen(PS_SOLID, 1, outline);
-    HGDIOBJ oldBrush = SelectObject(hdc, hBrush);
-    HGDIOBJ oldPen = SelectObject(hdc, hPen);
-
-    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
-
-    SelectObject(hdc, oldPen);
-    SelectObject(hdc, oldBrush);
-    DeleteObject(hPen);
-    DeleteObject(hBrush);
+    RECT rc = {};
+    GetClientRect(hwnd, &rc);
+    const int x = GET_X_LPARAM(lParam);
+    const int y = GET_Y_LPARAM(lParam);
+    return x >= rc.left && x < rc.right && y >= rc.top && y < rc.bottom;
 }
 
-static void DrawStyledSliderChannel(LPNMCUSTOMDRAW lpcd)
+static void InvalidateVolumeButton()
 {
-    HWND hTrackBar = lpcd->hdr.hwndFrom;
-    HDC hdc = lpcd->hdc;
+    if (g_hVolumeButton) {
+        InvalidateRect(g_hVolumeButton, nullptr, FALSE);
+    }
+}
 
-    RECT rcClient = {};
-    GetClientRect(hTrackBar, &rcClient);
+static void AdjustMainVolumeFromButton(int steps)
+{
+    constexpr float kVolumeStep = 0.05f;
 
-    HBRUSH hBackBrush = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
-    FillRect(hdc, &rcClient, hBackBrush);
-    DeleteObject(hBackBrush);
+    float volume = current_volume.load();
+    volume += static_cast<float>(steps) * kVolumeStep;
+    volume = (std::max)(0.0f, (std::min)(1.0f, volume));
+    current_volume.store(volume);
 
-    RECT buttonRect = rcClient;
-    InflateRect(&buttonRect, -1, -1);
+    UpdateFilterSettings();
+    InvalidateVolumeButton();
+}
 
-    RECT shadowRect = buttonRect;
-    OffsetRect(&shadowRect, 0, 1);
-    PaintRoundedRect(hdc, shadowRect, 10, RGB(226, 230, 235), RGB(226, 230, 235));
-    PaintRoundedRect(hdc, buttonRect, 10, RGB(247, 248, 250), RGB(218, 224, 232));
+static LRESULT CALLBACK VolumeButtonSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    UNREFERENCED_PARAMETER(uIdSubclass);
+    UNREFERENCED_PARAMETER(dwRefData);
 
-    const int buttonHeight = static_cast<int>(buttonRect.bottom - buttonRect.top);
-    const int trackHeight = (std::max)(2, buttonHeight / 4 - 2);
-    const int trackCenterY = buttonRect.top + (buttonRect.bottom - buttonRect.top) / 2 + 4;
-    RECT trackRect = {
-        buttonRect.left + 6,
-        trackCenterY - trackHeight / 2,
-        buttonRect.right - 6,
-        trackCenterY + (trackHeight + 1) / 2
-    };
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_MOUSEMOVE:
+        if (!GetPropW(hwnd, L"hot")) {
+            SetPropW(hwnd, L"hot", reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        {
+            TRACKMOUSEEVENT tme = { sizeof(tme) };
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            TrackMouseEvent(&tme);
+        }
+        return 0;
+    case WM_MOUSELEAVE:
+        RemovePropW(hwnd, L"hot");
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+        SetFocus(hwnd);
+        SetCapture(hwnd);
+        SetPropW(hwnd, L"pressed", reinterpret_cast<HANDLE>(static_cast<INT_PTR>(msg == WM_RBUTTONDOWN ? 2 : 1)));
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_LBUTTONUP:
+    case WM_RBUTTONUP:
+    {
+        const int pressedButton = static_cast<int>(reinterpret_cast<INT_PTR>(GetPropW(hwnd, L"pressed")));
+        RemovePropW(hwnd, L"pressed");
+        if (GetCapture() == hwnd) {
+            ReleaseCapture();
+        }
 
-    PaintRoundedRect(hdc, trackRect, 4, RGB(223, 227, 233), RGB(205, 211, 219));
+        const int releasedButton = (msg == WM_RBUTTONUP) ? 2 : 1;
+        if (pressedButton == releasedButton && IsVolumeButtonPointInside(hwnd, lParam)) {
+            AdjustMainVolumeFromButton(releasedButton == 2 ? -1 : 1);
+        }
 
-    int minVal = (int)SendMessage(hTrackBar, TBM_GETRANGEMIN, 0, 0);
-    int maxVal = (int)SendMessage(hTrackBar, TBM_GETRANGEMAX, 0, 0);
-    int curVal = (int)SendMessage(hTrackBar, TBM_GETPOS, 0, 0);
-    if (maxVal <= minVal) {
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+    case WM_MOUSEWHEEL:
+    {
+        const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        int steps = delta / WHEEL_DELTA;
+        if (steps == 0 && delta != 0) {
+            steps = delta > 0 ? 1 : -1;
+        }
+        if (steps != 0) {
+            AdjustMainVolumeFromButton(steps);
+        }
+        return 0;
+    }
+    case WM_CAPTURECHANGED:
+        RemovePropW(hwnd, L"pressed");
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_KEYDOWN:
+        if (wParam == VK_LEFT || wParam == VK_DOWN) {
+            AdjustMainVolumeFromButton(-1);
+            return 0;
+        }
+        if (wParam == VK_RIGHT || wParam == VK_UP || wParam == VK_SPACE || wParam == VK_RETURN) {
+            AdjustMainVolumeFromButton(1);
+            return 0;
+        }
+        break;
+    case WM_NCDESTROY:
+        RemovePropW(hwnd, L"hot");
+        RemovePropW(hwnd, L"pressed");
+        RemoveWindowSubclass(hwnd, VolumeButtonSubclassProc, 0);
+        break;
+    default:
+        break;
+    }
+
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+static void EnsureVolumeGdiplusStarted()
+{
+    if (g_volumeGdiplusToken != 0) {
         return;
     }
 
-    const int trackWidth = trackRect.right - trackRect.left;
-    const COLORREF accent = RGB(120, 205, 240);
+    Gdiplus::GdiplusStartupInput input;
+    Gdiplus::GdiplusStartup(&g_volumeGdiplusToken, &input, nullptr);
+}
 
-    if (minVal < 0 && maxVal > 0) {
-        int zeroX = trackRect.left + MulDiv(0 - minVal, trackWidth, maxVal - minVal);
-        int curX = trackRect.left + MulDiv(curVal - minVal, trackWidth, maxVal - minVal);
-
-        RECT centerLine = { zeroX - 1, trackRect.top + 1, zeroX + 1, trackRect.bottom - 1 };
-        HBRUSH hCenterBrush = CreateSolidBrush(RGB(145, 153, 165));
-        FillRect(hdc, &centerLine, hCenterBrush);
-        DeleteObject(hCenterBrush);
-
-        if (curX != zeroX) {
-            RECT progressRect = trackRect;
-            progressRect.left = (std::min)(zeroX, curX);
-            progressRect.right = (std::max)(zeroX, curX);
-            if (progressRect.right - progressRect.left < 2) {
-                progressRect.right = progressRect.left + 2;
-            }
-
-            PaintRoundedRect(hdc, progressRect, 4, accent, accent);
-        }
+static void ShutdownVolumeGdiplus()
+{
+    if (g_volumeGdiplusToken == 0) {
+        return;
     }
-    else if (curVal > minVal) {
-        int activeWidth = MulDiv(curVal - minVal, trackWidth, maxVal - minVal);
-        RECT progressRect = trackRect;
-        progressRect.right = trackRect.left + activeWidth;
 
-        if (progressRect.right - progressRect.left >= 2) {
-            PaintRoundedRect(hdc, progressRect, 4, accent, accent);
-        }
+    Gdiplus::GdiplusShutdown(g_volumeGdiplusToken);
+    g_volumeGdiplusToken = 0;
+}
+
+static void DrawVolumeButton(const DRAWITEMSTRUCT* pDIS)
+{
+    HDC targetDc = pDIS->hDC;
+    RECT rc = pDIS->rcItem;
+    const int width = rc.right - rc.left;
+    const int height = rc.bottom - rc.top;
+    if (width <= 0 || height <= 0) {
+        return;
     }
+
+    HDC bufferDc = CreateCompatibleDC(targetDc);
+    HBITMAP bufferBitmap = bufferDc ? CreateCompatibleBitmap(targetDc, width, height) : nullptr;
+    if (!bufferDc || !bufferBitmap) {
+        if (bufferBitmap) {
+            DeleteObject(bufferBitmap);
+        }
+        if (bufferDc) {
+            DeleteDC(bufferDc);
+        }
+        return;
+    }
+
+    HGDIOBJ oldBitmap = SelectObject(bufferDc, bufferBitmap);
+    RECT localRc = { 0, 0, width, height };
+
+    HBRUSH hBack = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+    FillRect(bufferDc, &localRc, hBack);
+    DeleteObject(hBack);
+
+    const bool hot = GetPropW(pDIS->hwndItem, L"hot") != nullptr;
+
+    const float diameter = static_cast<float>((std::min)(width, height)) - 3.0f;
+    const float left = (static_cast<float>(width) - diameter) / 2.0f;
+    const float top = (static_cast<float>(height) - diameter) / 2.0f;
+    Gdiplus::RectF knobRect(left, top, diameter, diameter);
+
+    EnsureVolumeGdiplusStarted();
+    Gdiplus::Graphics graphics(bufferDc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+    graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+
+    Gdiplus::RectF ringRect = knobRect;
+    ringRect.Inflate(-3.6f, -3.6f);
+
+    const float normalizedVolume = (std::max)(0.0f, (std::min)(1.0f, current_volume.load()));
+    const float sweep = normalizedVolume * 270.0f;
+    const Gdiplus::Color accent = hot
+        ? Gdiplus::Color(255, 22, 118, 214)
+        : Gdiplus::Color(255, 45, 143, 224);
+    Gdiplus::Pen activeRingPen(accent, 3.6f);
+    activeRingPen.SetStartCap(Gdiplus::LineCapRound);
+    activeRingPen.SetEndCap(Gdiplus::LineCapRound);
+    if (sweep > 0.2f) {
+        graphics.DrawArc(&activeRingPen, ringRect, 135.0f, sweep);
+    }
+    graphics.Flush(Gdiplus::FlushIntentionFlush);
+
+    RECT textRect = {
+        static_cast<LONG>(std::floor(knobRect.X)),
+        static_cast<LONG>(std::floor(knobRect.Y)),
+        static_cast<LONG>(std::ceil(knobRect.X + knobRect.Width)),
+        static_cast<LONG>(std::ceil(knobRect.Y + knobRect.Height))
+    };
+
+    wchar_t volumeText[16] = {};
+    const int volumePercent = static_cast<int>(std::round(current_volume.load() * 100.0f));
+    swprintf_s(volumeText, L"%d", volumePercent);
+
+    SetBkMode(bufferDc, TRANSPARENT);
+    HFONT valueFont = CreateFontW(volumePercent >= 100 ? 12 : 14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HFONT oldFont = valueFont ? (HFONT)SelectObject(bufferDc, valueFont) : nullptr;
+    SetTextColor(bufferDc, RGB(12, 25, 42));
+    DrawTextW(bufferDc, volumeText, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (oldFont) {
+        SelectObject(bufferDc, oldFont);
+    }
+    if (valueFont) {
+        DeleteObject(valueFont);
+    }
+
+    BitBlt(targetDc, rc.left, rc.top, width, height, bufferDc, 0, 0, SRCCOPY);
+    SelectObject(bufferDc, oldBitmap);
+    DeleteObject(bufferBitmap);
+    DeleteDC(bufferDc);
 }
 
 static void FillTrayIconData(HWND hWnd, NOTIFYICONDATAW& nid)
@@ -1872,7 +1921,7 @@ static void RequestApplicationExit(HWND hWnd)
     SendMessageW(hWnd, WM_DESTROY, 0, 0);
 }
 
-static void ShowTrayContextMenu(HWND hWnd)
+static void ShowTrayContextMenu(HWND hWnd, const POINT* anchorPoint = nullptr)
 {
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) {
@@ -1920,7 +1969,12 @@ static void ShowTrayContextMenu(HWND hWnd)
     SetMenuDefaultItem(hMenu, IDM_TRAY_RESTORE, FALSE);
 
     POINT pt = {};
-    GetCursorPos(&pt);
+    if (anchorPoint) {
+        pt = *anchorPoint;
+    }
+    else {
+        GetCursorPos(&pt);
+    }
     SetForegroundWindow(hWnd);
     UINT command = TrackPopupMenu(hMenu,
         TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RETURNCMD,
@@ -1942,6 +1996,21 @@ static void ShowTrayContextMenu(HWND hWnd)
     if (hExitIcon) DeleteObject(hExitIcon);
 }
 
+static void ShowCompactContextMenu(HWND hDlg, POINT pt)
+{
+    ShowTrayContextMenu(hDlg, &pt);
+}
+
+static void RestoreNormalWindowForMenuCommand(HWND hDlg)
+{
+    if (CompactModeIsActive()) {
+        CompactModeExit(hDlg);
+    }
+    else {
+        RestoreMainWindow(hDlg);
+    }
+}
+
 INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
     UNREFERENCED_PARAMETER(lParam);
@@ -1961,6 +2030,18 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
             return (INT_PTR)TRUE;
         }
         break;
+
+    case WM_NOTIFY:
+    {
+        LPNMHDR hdr = reinterpret_cast<LPNMHDR>(lParam);
+        if (hdr && hdr->idFrom == IDC_ABOUT_GITHUB &&
+            (hdr->code == NM_CLICK || hdr->code == NM_RETURN)) {
+            const NMLINK* link = reinterpret_cast<const NMLINK*>(lParam);
+            ShellExecuteW(hDlg, L"open", link->item.szUrl, nullptr, nullptr, SW_SHOWNORMAL);
+            return (INT_PTR)TRUE;
+        }
+        break;
+    }
     }
 
     return (INT_PTR)FALSE;
@@ -2587,7 +2668,7 @@ static bool SaveStationFromPlaylist(HWND hDlg, int index)
     if (hListView) {
         std::wstring displayName = stationName;
         if (index == g_currentlyPlayingIndex) {
-            displayName = L"▶ " + displayName;
+            displayName = kPlaylistPlayingIcon + displayName;
         }
         ListView_SetItemText(hListView, index, 0, const_cast<LPWSTR>(displayName.c_str()));
         ListView_SetItemText(hListView, index, 1, const_cast<LPWSTR>(playlist[index].url.c_str()));
@@ -2625,7 +2706,7 @@ static bool EditStationNameInPlaylist(HWND hDlg, int index)
     if (hListView) {
         std::wstring displayName = stationName;
         if (index == g_currentlyPlayingIndex) {
-            displayName = L"▶ " + displayName;
+            displayName = kPlaylistPlayingIcon + displayName;
         }
         ListView_SetItemText(hListView, index, 0, const_cast<LPWSTR>(displayName.c_str()));
         ListView_SetItemText(hListView, index, 1, const_cast<LPWSTR>(playlist[index].url.c_str()));
@@ -3226,29 +3307,17 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             }
         }
 
-        //control настройки
-        g_hSettingStatic = GetDlgItem(hDlg, IDC_ST_SETTING);
-        if (g_hSettingStatic) {
-            LONG_PTR style = GetWindowLongPtr(g_hSettingStatic, GWL_STYLE);
-            style |= SS_NOTIFY;
-            SetWindowLongPtr(g_hSettingStatic, GWL_STYLE, style);
-            SetWindowPos(g_hSettingStatic, NULL, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-            SetWindowSubclass(g_hSettingStatic, SettingStaticSubclassProc, 0, 0);
-            InvalidateRect(g_hSettingStatic, NULL, TRUE);
-            UpdateWindow(g_hSettingStatic);
+        g_hVolumeButton = GetDlgItem(hDlg, IDC_BUTTON_VOLUME);
+        if (g_hVolumeButton) {
+            SetWindowSubclass(g_hVolumeButton, VolumeButtonSubclassProc, 0, 0);
         }
-        // Получаем дескрипторы слайдеров
-       //слайдеры громкости и тембра
-        g_hSliderVolume = GetDlgItem(hDlg, IDC_SLIDER_VOL);
-        g_hSliderTreble = GetDlgItem(hDlg, IDC_SLIDER_HI);
-        g_hSliderBass = GetDlgItem(hDlg, IDC_SLIDER_BASS);
         g_hNowPlayingBar = GetDlgItem(hDlg, IDC_STATIC_NOW_PLAYING_BAR);
         SetupMainDialogTooltips(hDlg);
         CompactModeCallbacks compactCallbacks;
         compactCallbacks.getTitleText = GetCompactModeTitleText;
         compactCallbacks.refreshTooltips = RefreshCompactModeTooltips;
         compactCallbacks.invalidateNormalText = InvalidateCompactModeNormalText;
+        compactCallbacks.showContextMenu = ShowCompactContextMenu;
         CompactModeConfigure(hDlg, g_hStatic, hListboxFont, hButtonFont, compactCallbacks);
         CompactModeInstallCoverSubclass(hDlg);
 
@@ -3282,23 +3351,6 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         
         }
 
-        SendMessage(g_hSliderVolume, TBM_SETRANGEMIN, TRUE, 0);
-        SendMessage(g_hSliderVolume, TBM_SETRANGEMAX, TRUE, 100);
-        float rawVol = current_volume.load();
-        if (rawVol < 0.0f) rawVol = 0.0f;
-        if (rawVol > 1.0f) rawVol = 1.0f;
-        int vol = (int)std::round(rawVol * 100.0f);
-        SendMessage(g_hSliderVolume, TBM_SETPOS, TRUE, vol);
-
-        SendMessage(g_hSliderBass, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(-16, 16));
-        int gain = (int)current_eq_gain_bass.load();
-        SendMessage(g_hSliderBass, TBM_SETPOS, TRUE, gain);
-        SendMessage(g_hSliderBass, TBM_SETPAGESIZE, TRUE, (LPARAM)1);
-
-        SendMessage(g_hSliderTreble, TBM_SETRANGE, (WPARAM)TRUE, MAKELPARAM(-16, 16));
-        gain = (int)current_eq_gain.load();
-        SendMessage(g_hSliderTreble, TBM_SETPOS, TRUE, gain);
-        SendMessage(g_hSliderTreble, TBM_SETPAGESIZE, 0, (LPARAM)1);
         // Setup ListView
         HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
         SendMessage(hListView, WM_SETFONT, (WPARAM)hListboxFont, TRUE);
@@ -3391,6 +3443,9 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                 case IDC_BUTTON_FORV:
                 case IDC_BUTTON_PREVIOUS_STATION:
                 case IDC_BUTTON_REC:
+                case IDC_BUTTON_VOLUME:
+                case IDC_BUTTON_EQ:
+                case IDC_ST_SETTING:
                     SetFocus(hDlg);
                     break;
                 default:
@@ -3583,10 +3638,13 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         return (INT_PTR)TRUE;
 
     case WM_APP_SET_VOLUME_SLIDER:
-        SendMessage(g_hSliderVolume, TBM_SETPOS, TRUE, (LPARAM)wParam);
-        InvalidateRect(g_hSliderVolume, nullptr, TRUE);
-        UpdateWindow(g_hSliderVolume);
-        break;
+    {
+        const float volume = (std::max)(0.0f, (std::min)(1.0f, static_cast<float>(wParam) / 100.0f));
+        current_volume.store(volume);
+        UpdateFilterSettings();
+        InvalidateVolumeButton();
+        return 0;
+    }
     case WM_APP_PLAYLIST_NAME_RESOLVED:
     {
         std::unique_ptr<PlaylistNameResolvedPayload> payload(reinterpret_cast<PlaylistNameResolvedPayload*>(lParam));
@@ -3617,8 +3675,8 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         if (payload->index == g_currentlyPlayingIndex) {
             wchar_t currentText[256] = { 0 };
             ListView_GetItemText(hListView, payload->index, 0, currentText, _countof(currentText));
-            if (std::wstring(currentText).rfind(L"▶ ", 0) == 0) {
-                displayName = L"▶ " + displayName;
+            if (std::wstring(currentText).rfind(kPlaylistPlayingIcon, 0) == 0) {
+                displayName = kPlaylistPlayingIcon + displayName;
             }
         }
 
@@ -3670,7 +3728,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
-        std::wstring displayName = L"▶ " + stationName;
+        std::wstring displayName = kPlaylistPlayingIcon + stationName;
         ListView_SetItemText(hListView, index, 0, const_cast<LPWSTR>(displayName.c_str()));
         SetStationNameColumnWidth(hListView);
         InvalidateNowPlayingBar(hDlg);
@@ -3751,11 +3809,11 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             return (INT_PTR)TRUE;
 
         case IDM_TRAY_RESTORE:
-            RestoreMainWindow(hDlg);
+            RestoreNormalWindowForMenuCommand(hDlg);
             return (INT_PTR)TRUE;
 
         case IDM_ABOUT:
-            RestoreMainWindow(hDlg);
+            RestoreNormalWindowForMenuCommand(hDlg);
             DialogBox(GetModuleHandle(NULL),
                 MAKEINTRESOURCE(IDD_ABOUTBOX),
                 hDlg,
@@ -3815,12 +3873,17 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
         case IDC_ST_SETTING:
         {
-            RestoreMainWindow(hDlg);
+            RestoreNormalWindowForMenuCommand(hDlg);
             DialogBox(GetModuleHandle(NULL),
                 MAKEINTRESOURCE(IDD_DIALOG_SETTING),
                 hDlg,
                 SettingsDialogProc);
 
+            return (INT_PTR)TRUE;
+        }
+        case IDC_BUTTON_EQ:
+        {
+            ShowParametricEqWindow(hDlg);
             return (INT_PTR)TRUE;
         }
         case IDC_BUTTON_REC:
@@ -4117,37 +4180,6 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         return (INT_PTR)TRUE;
     }
     break;
-    case WM_HSCROLL:
-    {
-        HWND hSlider = (HWND)lParam;
-        if (hSlider == g_hSliderVolume || hSlider == g_hSliderTreble || hSlider == g_hSliderBass) {
-            if (hSlider == g_hSliderVolume) {
-
-                int pos = static_cast<int>(SendMessage(hSlider, TBM_GETPOS, 0, 0));
-                float new_vol = pos / 100.0f;
-                current_volume.store(new_vol);
-
-            }
-            else if (hSlider == g_hSliderTreble) {
-
-                int pos = static_cast<int>(SendMessage(hSlider, TBM_GETPOS, 0, 0));
-                float new_gain = static_cast<float>(pos);
-                current_eq_gain.store(new_gain);
-            }
-            else if (hSlider == g_hSliderBass) {
-
-                int pos = static_cast<int>(SendMessage(hSlider, TBM_GETPOS, 0, 0));
-                float new_gain = static_cast<float>(pos);
-                current_eq_gain_bass.store(new_gain);
-            }
-
-            UpdateFilterSettings();
-
-            InvalidateRect(hSlider, NULL, FALSE);
-        }
-
-    }
-    break;
     case WM_MEASUREITEM:
     {
         LPMEASUREITEMSTRUCT pMIS = (LPMEASUREITEMSTRUCT)lParam;
@@ -4211,6 +4243,11 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
         if (pDIS->CtlType == ODT_BUTTON)
         {
+            if (pDIS->CtlID == IDC_BUTTON_VOLUME) {
+                DrawVolumeButton(pDIS);
+                return TRUE;
+            }
+
             COLORREF bgColor = (pDIS->itemState & ODS_SELECTED) ? RGB(200, 220, 255) : RGB(225, 235, 255);
             if (pDIS->CtlID == IDC_BUTTON_PP) {
                 bgColor = (pDIS->itemState & ODS_SELECTED) ? RGB(180, 205, 240) : RGB(205, 220, 245);
@@ -4255,6 +4292,8 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             case IDC_BUTTON_REV: icon = L"\uE892"; break;
             case IDC_BUTTON_FORV: icon = L"\uE893"; break;
             case IDC_BUTTON_PREVIOUS_STATION: icon = L"\uE8EE"; break;
+            case IDC_BUTTON_EQ: icon = L"\uE9E9"; break;
+            case IDC_ST_SETTING: icon = L"\uE713"; break;
             case IDC_BUTTON_REC: {
                 if (g_rec_semafor.load()) {
                     icon = L"\uea3b";
@@ -4369,122 +4408,6 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         if (lpnm->code == NM_CUSTOMDRAW)
         {
             LPNMCUSTOMDRAW lpcd = (LPNMCUSTOMDRAW)lParam;
-            // Проверяем, что это нужный TrackBar
-            if (lpcd->hdr.idFrom == IDC_SLIDER_VOL ||
-                lpcd->hdr.idFrom == IDC_SLIDER_BASS ||
-                lpcd->hdr.idFrom == IDC_SLIDER_HI)
-            {
-                switch (lpcd->dwDrawStage)
-                {
-                case CDDS_PREPAINT:
-                {
-                    SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_NOTIFYITEMDRAW);
-                    return TRUE;
-                }
-
-                case CDDS_ITEMPREPAINT:
-                {
-
-                    if (lpcd->dwItemSpec == TBCD_THUMB)
-                    {
-                        HDC hdc = lpcd->hdc;
-                        RECT rcThumb = lpcd->rc;
-
-                        // Увеличиваем ширину бегунка
-                        int extra = 5;
-                        rcThumb.left -= extra;
-                        rcThumb.right += extra;
-                        rcThumb.top -= 5;
-
-                        HWND hTrackBar = lpcd->hdr.hwndFrom;
-                        int curVal = (int)SendMessage(hTrackBar, TBM_GETPOS, 0, 0);
-
-                        //бегунок не рисуем - только значки из шрифта
-                                            
-                        LOGFONT lf; HFONT hVolumeIconFont = NULL; HFONT hOldFont = NULL;
-                        if (GetObject(hButtonFont, sizeof(LOGFONT), &lf))
-                        {
-                            lf.lfHeight = -MulDiv(14, GetDeviceCaps(hdc, LOGPIXELSY), 72); // 16pt → пиксели
-                            hVolumeIconFont = CreateFontIndirect(&lf);
-                        }
-                        if (hVolumeIconFont)
-                        {
-                            hOldFont = (HFONT)SelectObject(hdc, hVolumeIconFont);
-
-                            SetBkMode(hdc, TRANSPARENT);
-
-                            // ===== иконка =====
-                            if (lpcd->hdr.idFrom == IDC_SLIDER_VOL)
-                            {
-                                DrawTextW(hdc, L" \ue994", -1, &rcThumb, DT_CENTER | DT_VCENTER | DT_SINGLELINE); //
-                            }
-                            else if (lpcd->hdr.idFrom == IDC_SLIDER_HI)
-                            {
-                                DrawTextW(hdc, L"\uf090", -1, &rcThumb, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-                            }
-                            else if (lpcd->hdr.idFrom == IDC_SLIDER_BASS) {
-                                DrawTextW(hdc, L"\uf08e", -1, &rcThumb, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                            }
-
-                            SelectObject(hdc, hOldFont);
-                            DeleteObject(hVolumeIconFont);
-                        }
-                        // ===== значение =====
-                        wchar_t buf[32];
-                        wsprintf(buf, L"%d", curVal);
-
-                        if (hTrackBar != g_hSliderVolume) {
-                            if (curVal < 0)
-                                wsprintf(buf, L"-%d", curVal);
-                            else if (curVal == 0)
-                                wsprintf(buf, L"%d", curVal);
-                            else if (curVal > 0)
-                                wsprintf(buf, L"+%d", curVal);
-                        }
-                      
-                        SetBkMode(hdc, TRANSPARENT);
-                        // Цвет текста под фон бегунка
-                        SetTextColor(hdc, RGB(20, 20, 20));
-
-                        HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-                        HFONT oldFont = (HFONT)SelectObject(hdc, hFont);
-
-                        if (rcThumb.left > 40)
-                            rcThumb.left -= 40;
-                        else
-                            rcThumb.left += 40;
-
-                        DrawText(
-                            hdc,
-                            buf,
-                            -1,
-                            &rcThumb,
-                            DT_CENTER | DT_VCENTER | DT_SINGLELINE
-                        );
-
-                        SelectObject(hdc, oldFont);
-
-                        SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
-                        return TRUE;
-                    }
-                    // =======================
-                    // РИСУЕМ ПОЛОСКУ
-                    // =======================
-                    if (lpcd->dwItemSpec == TBCD_CHANNEL)
-                    {
-                        DrawStyledSliderChannel(lpcd);
-
-                        SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
-                        return TRUE;
-                    }
-
-                    // Всё остальное (tics) не даём системе рисовать
-                    SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
-                    return TRUE;
-                }
-                }
-            }
             if (lpcd->hdr.idFrom == IDC_LIST_URL)
             {
                 LPNMLVCUSTOMDRAW lplv = (LPNMLVCUSTOMDRAW)lParam;
@@ -4715,10 +4638,11 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         if (hNowPlayingTitleFont) DeleteObject(hNowPlayingTitleFont);
         if (g_hbrBlack)  DeleteObject(g_hbrBlack);
 
-        if (g_hSettingStatic) {
-            RemoveWindowSubclass(g_hSettingStatic, SettingStaticSubclassProc, 0);
-            g_hSettingStatic = NULL;
+        if (g_hVolumeButton) {
+            RemoveWindowSubclass(g_hVolumeButton, VolumeButtonSubclassProc, 0);
+            g_hVolumeButton = NULL;
         }
+        ShutdownVolumeGdiplus();
 
         StopMetadataTimer();
 

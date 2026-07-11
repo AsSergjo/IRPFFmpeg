@@ -115,7 +115,7 @@ extern HWND g_hCoverArt;
 extern HWND g_hPlaylist;
 extern HWND g_hHistory;
 extern HWND g_hBtnPlayPause, g_hBtnStop, g_hBtnOpen, g_hBtnPrev, g_hBtnNext;
-extern HWND g_hSliderVolume, g_hSliderTreble;
+extern HWND g_hVolumeButton;
 extern HWND g_hLabelVolume, g_hLabelTreble;
 
 constexpr int SHOWCQT_WIDTH = 560;
