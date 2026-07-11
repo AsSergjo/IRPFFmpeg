@@ -66,6 +66,7 @@ dist/
 *.rar
 
 # OS/editor noise
+.agents/
 Thumbs.db
 Desktop.ini
 .DS_Store

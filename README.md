@@ -6,17 +6,21 @@ IRPFFmpeg is a desktop internet radio player for Windows. It plays network audio
 
 The project is a lightweight C++17 Win32 application: no Electron, no browser shell, with a separate launcher that prepares the FFmpeg/SDL2 DLL environment.
 
-![IRPFFmpeg main window](docs/assets/main-window.png)
+![IRPFFmpeg normal mode](normal_mode.png)
 
 Main window: playlist management, playback controls, stream status, cover art, history and spectrum visualization in the normal layout.
 
-![IRPFFmpeg settings window](window_programm_setting.png)
+![IRPFFmpeg parametric equalizer](equalizer_window.png)
 
-Settings window: language selection, audio processing modules, tray behavior, cover popup and compact-mode options.
+Parametric equalizer: five bands with independent Gain/Q controls and a live graph of the resulting frequency response.
 
 ![IRPFFmpeg compact mode](compact_mode.png)
 
 Compact mode: a small spectrum window with the current track line, previous-station button and restore-to-normal button.
+
+![IRPFFmpeg settings window](window_programm_setting.png)
+
+Settings window: language selection, audio processing modules, tray behavior, cover popup and compact-mode options.
 
 ## Features
 
@@ -30,7 +34,7 @@ Compact mode: a small spectrum window with the current track line, previous-stat
 - record the current broadcast to `Rec`;
 - export recordings to MP3 320 kbit/sec or FLAC;
 - write metadata and cover art to recordings when available;
-- adjust volume, bass and treble;
+- adjust volume from the dedicated arc control and tune a five-band parametric equalizer with a live summed frequency-response graph;
 - Stereo Width, Exciter, DeepBass, Speech Intelligibility Compressor, Station LUFS Normalizer, GainRider and final limiter;
 - minimize to the system tray;
 - compact mode with spectrum visualization, current track text, previous-station button and restore-to-normal button;
@@ -52,7 +56,7 @@ It is better not to run `IRPFFmpeg.exe` directly: the main application needs lib
 Recommended download flow from GitHub Releases:
 
 1. Download the DLL support archive `IRPFFmpeg-support-win-x64.zip` once if you do not already have a `heap_dll` folder with third-party DLLs.
-2. Download the project archive for the current version, for example `IRPFFmpeg-v1.1.0-project-win-x64.zip`.
+2. Download the project archive for the current version, for example `IRPFFmpeg-v1.2.0-project-win-x64.zip`.
 3. Extract both archives into the same folder.
 4. Run `Start_IRPFFmpeg.exe`.
 
