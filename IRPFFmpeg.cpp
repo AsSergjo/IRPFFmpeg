@@ -3805,7 +3805,9 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         {
         case IDOK:
         case IDCANCEL:
-            RequestApplicationExit(hDlg);
+            // DialogBox synthesizes IDOK/IDCANCEL for Enter/Escape even though
+            // the main window has no OK or Cancel command. Ignore both so
+            // keyboard navigation cannot terminate the application.
             return (INT_PTR)TRUE;
 
         case IDM_TRAY_RESTORE:
