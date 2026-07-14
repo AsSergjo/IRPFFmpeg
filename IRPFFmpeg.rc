@@ -38,8 +38,8 @@ IDI_SMALL               ICON                    "small.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,2,0,0
- PRODUCTVERSION 1,2,0,0
+ FILEVERSION 1,2,1,0
+ PRODUCTVERSION 1,2,1,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x3L
@@ -56,11 +56,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "IRPFFmpeg"
             VALUE "FileDescription", "IRPFFmpeg internet radio player"
-            VALUE "FileVersion", "1.2.0.0"
+            VALUE "FileVersion", "1.2.1.0"
             VALUE "InternalName", "IRPFFmpeg"
             VALUE "OriginalFilename", "IRPFFmpeg.exe"
             VALUE "ProductName", "IRPFFmpeg"
-            VALUE "ProductVersion", "1.2.0.0"
+            VALUE "ProductVersion", "1.2.1.0"
             VALUE "LegalCopyright", "Copyright (c) 2026"
         END
     END
@@ -116,11 +116,11 @@ END
 
 IDD_ABOUTBOX DIALOGEX 0, 0, 190, 78
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CLIPCHILDREN | WS_CAPTION | WS_SYSMENU
-CAPTION "IRP+ffmpeG"
+CAPTION "IRPffmpeg v1.2.1"
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
     ICON            IDI_IRPFFMPEG,IDC_STATIC,14,14,21,20
-    LTEXT           "IRP+ffmpeG 1.2.0",IDC_STATIC,42,14,130,8,SS_NOPREFIX
+    LTEXT           "IRPffmpeg v1.2.1",IDC_STATIC,42,14,130,8,SS_NOPREFIX
     LTEXT           "(c) 2026",IDC_STATIC,42,26,114,8
     CONTROL         "<a href=""https://github.com/AsSergjo/IRPFFmpeg"">GitHub repository</a>",IDC_ABOUT_GITHUB,
                     "SysLink",WS_TABSTOP,42,38,120,12
@@ -129,7 +129,7 @@ END
 
 IDD_MAIN_DIALOG DIALOGEX 0, 0, 693, 313
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_MINIMIZEBOX | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "IRP+ffmpeG"
+CAPTION "IRPffmpeg v1.2.1"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     CONTROL         "",IDC_STATIC_IMG,"Static",SS_OWNERDRAW | WS_BORDER,4,4,331,305
@@ -254,7 +254,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APP_TITLE           "IRP+ffmpeG"
+    IDS_APP_TITLE           "IRPffmpeg v1.2.1"
     IDC_IRPFFMPEG           "IRPFFMPEG"
 END
 

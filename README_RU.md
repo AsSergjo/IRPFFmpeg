@@ -58,7 +58,7 @@ Start_IRPFFmpeg.exe
 Рекомендуемая схема загрузки из GitHub Releases:
 
 1. Скачайте один раз DLL-support архив `IRPFFmpeg-support-win-x64.zip`, если у вас еще нет папки `heap_dll` со сторонними DLL.
-2. Скачайте project-архив актуальной версии, например `IRPFFmpeg-v1.2.0-project-win-x64.zip`.
+2. Скачайте project-архив актуальной версии, например `IRPFFmpeg-v1.2.1-project-win-x64.zip`.
 3. Распакуйте оба архива в одну папку.
 4. Запускайте `Start_IRPFFmpeg.exe`.
 

@@ -46,7 +46,7 @@
 
 const int MAX_RECONNECT_ATTEMPTS = 3;
 const int RECONNECT_DELAY_MS = 2000;
-const wchar_t CLASS_NAME[] = L"IRP+ffmpeg";
+const wchar_t MAIN_WINDOW_TITLE[] = L"IRPffmpeg v1.2.1";
 
 #define ID_TIMER_IMAGE_URL 3
 #define ID_TIMER_METADATA 4
@@ -1254,7 +1254,7 @@ static void ApplySettingsDialogLanguage(HWND hDlg)
 static void ApplyMainDialogLanguage(HWND hDlg)
 {
     if (hDlg) {
-        SetWindowTextW(hDlg, L"IRP+ffmpeG");
+        SetWindowTextW(hDlg, MAIN_WINDOW_TITLE);
         if (g_nowPlayingStatus == L"Остановлено" || g_nowPlayingStatus == L"Stopped") {
             g_nowPlayingStatus = TrString("status.stopped", L"Остановлено");
             InvalidateNowPlayingBar(hDlg);
@@ -1801,7 +1801,7 @@ static void FillTrayIconData(HWND hWnd, NOTIFYICONDATAW& nid)
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = WM_APP_TRAY_ICON;
     nid.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDI_IRPFFMPEG));
-    wcscpy_s(nid.szTip, L"IRP+ffmpeG");
+    wcscpy_s(nid.szTip, L"IRPffmpeg");
 }
 
 static void AddTrayIcon(HWND hWnd)
@@ -1835,7 +1835,7 @@ static void ShowTrayBalloon(HWND hWnd)
     NOTIFYICONDATAW nid = {};
     FillTrayIconData(hWnd, nid);
     nid.uFlags |= NIF_INFO;
-    wcscpy_s(nid.szInfoTitle, Tr("tray.balloon.title", L"IRP+ffmpeG работает в трее"));
+    wcscpy_s(nid.szInfoTitle, Tr("tray.balloon.title", L"IRPffmpeg работает в трее"));
     wcscpy_s(nid.szInfo, Tr("tray.balloon.text", L"Дважды щелкните значок, чтобы вернуть окно. Для выхода используйте меню трея."));
     nid.dwInfoFlags = NIIF_INFO;
     Shell_NotifyIconW(NIM_MODIFY, &nid);
@@ -1928,7 +1928,7 @@ static void ShowTrayContextMenu(HWND hWnd, const POINT* anchorPoint = nullptr)
         return;
     }
 
-    AppendMenuW(hMenu, MF_STRING, IDM_TRAY_RESTORE, Tr("tray.restore", L"Открыть IRP+ffmpeG"));
+    AppendMenuW(hMenu, MF_STRING, IDM_TRAY_RESTORE, Tr("tray.restore", L"Открыть IRPffmpeg"));
     HBITMAP hOpenIcon = CreateMenuGlyphBitmap(hWnd, L"\uE8A7");
     SetMenuItemBitmapByCommand(hMenu, IDM_TRAY_RESTORE, hOpenIcon);
 
@@ -3198,7 +3198,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         // Экземпляр уже запущен — активируем его окно
-        HWND hWndExisting = FindWindowW(NULL, L"IRP+ffmpeG");
+        HWND hWndExisting = FindWindowW(NULL, MAIN_WINDOW_TITLE);
         if (hWndExisting) {
             if (!PostMessageW(hWndExisting, WM_APP_RESTORE_FROM_SINGLE_INSTANCE, 0, 0)) {
                 ShowWindow(hWndExisting, SW_RESTORE);

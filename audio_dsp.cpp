@@ -69,6 +69,7 @@ constexpr int LUFS_NORMALIZER_MAX_CHANNELS = 8;
 /*120 sec*/
 constexpr size_t LUFS_NORMALIZER_MAX_BLOCKS = 300;
 constexpr size_t LUFS_NORMALIZER_FAST_BLOCKS = 3;
+constexpr size_t LUFS_NORMALIZER_SILENCE_RESET_BLOCKS = 5;
 constexpr float g_referenceLufs = -9.00f;
 
 struct LufsBlock {
@@ -92,6 +93,8 @@ struct LufsGainNormalizerState {
     size_t fast_block_pos = 0;
     size_t fast_block_count = 0;
     float fast_lufs = -std::numeric_limits<float>::infinity();
+    size_t consecutive_silent_blocks = 0;
+    bool waiting_for_program_audio = false;
     Biquad prefilter[LUFS_NORMALIZER_MAX_CHANNELS];
     Biquad rlb_highpass[LUFS_NORMALIZER_MAX_CHANNELS];
     LufsBlock blocks[LUFS_NORMALIZER_MAX_BLOCKS];
@@ -268,6 +271,30 @@ void PushLufsNormalizerBlock(double energy_sum, uint64_t frames)
     const double block_lufs = MeanSquareToLufs(block_mean_square);
 
     LufsGainNormalizerState& st = g_lufs_normalizer;
+
+    // Five consecutive quiet-guard blocks are treated like the start of a
+    // different stream, clearing stale history without using track metadata.
+    if (block_lufs < kQuietGuardLufs) {
+        if (st.waiting_for_program_audio) {
+            st.allow_gain_increase = false;
+            return;
+        }
+
+        ++st.consecutive_silent_blocks;
+        if (st.consecutive_silent_blocks >= LUFS_NORMALIZER_SILENCE_RESET_BLOCKS) {
+            const int channels = st.channels;
+            const int sample_rate = st.sample_rate;
+            InitLufsGainNormalizerState(channels, sample_rate);
+            g_lufs_normalizer.waiting_for_program_audio = true;
+            g_lufs_normalizer.allow_gain_increase = false;
+            return;
+        }
+    }
+    else {
+        st.consecutive_silent_blocks = 0;
+        st.waiting_for_program_audio = false;
+    }
+
     st.allow_gain_increase = (block_lufs >= kQuietGuardLufs);
 
     // Keep a separate 800 ms rolling measurement for fast protection. It is
@@ -491,8 +518,8 @@ void ApplyLufsGainNormalizer(float* buffer, size_t frames, int channels, int sam
     const float seconds = static_cast<float>(frames) / static_cast<float>(sample_rate);
     float target_gain_db = g_lufs_normalizer.desired_gain_db;
 
-    constexpr float kFastGuardTriggerMarginLu = 3.0f;
-    constexpr float kFastGuardOutputMarginLu = 3.0f;
+    constexpr float kFastGuardTriggerMarginLu = 2.0f;
+    constexpr float kFastGuardOutputMarginLu = 2.0f;
     bool fast_guard_active = false;
     if (target_gain_db > 0.0f && std::isfinite(g_lufs_normalizer.fast_lufs)) {
         const float unguarded_output_lufs =
@@ -517,9 +544,9 @@ void ApplyLufsGainNormalizer(float* buffer, size_t frames, int channels, int sam
 
     const float diff_db = target_gain_db - old_gain_db;
 
-    constexpr float kGainRiseTimeConstantSec = 4.0f;
-    constexpr float kGainFallTimeConstantSec = 4.0f;
-    constexpr float kFastGuardFallTimeConstantSec = 0.5f;
+    constexpr float kGainRiseTimeConstantSec = 20.0f;
+    constexpr float kGainFallTimeConstantSec = 5.0f;
+    constexpr float kFastGuardFallTimeConstantSec = 1.0f; //1 sec tau guard
 
     float tau_sec = kGainFallTimeConstantSec;
     if (diff_db > 0.0f) {

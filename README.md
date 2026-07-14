@@ -58,7 +58,7 @@ It is better not to run `IRPFFmpeg.exe` directly: the main application needs lib
 Recommended download flow from GitHub Releases:
 
 1. Download the DLL support archive `IRPFFmpeg-support-win-x64.zip` once if you do not already have a `heap_dll` folder with third-party DLLs.
-2. Download the project archive for the current version, for example `IRPFFmpeg-v1.2.0-project-win-x64.zip`.
+2. Download the project archive for the current version, for example `IRPFFmpeg-v1.2.1-project-win-x64.zip`.
 3. Extract both archives into the same folder.
 4. Run `Start_IRPFFmpeg.exe`.
 
