@@ -52,6 +52,7 @@
 #define IDC_ABOUT_GITHUB                1039
 #define IDC_BUTTON_VOLUME               1040
 #define IDC_BUTTON_EQ                   1041
+#define IDC_CHECK_COMPACT_WITHOUT_SPECTRUM 1042
 #define ID_LISTBOX_COPY                 32771
 #define ID_LIST_URL_DELETE_STATION      32772
 #define ID_LIST_URL_ADD_STATION         32773
@@ -66,7 +67,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        132
 #define _APS_NEXT_COMMAND_VALUE         32777
-#define _APS_NEXT_CONTROL_VALUE         1042
+#define _APS_NEXT_CONTROL_VALUE         1043
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

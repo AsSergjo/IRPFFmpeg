@@ -44,6 +44,7 @@ bool redrawCoverImage(HWND hDlg);
 bool initCoverRenderer(HWND hDlg);
 bool reloadCoverTexture();
 HWND getCoverRendererWindow();
+void SetShowCQTProcessingEnabled(bool enabled);
 // Logging function
 void LogToUI(const std::string& message);
 // Функция для очистки ресурсов SDL

@@ -46,7 +46,7 @@
 
 const int MAX_RECONNECT_ATTEMPTS = 3;
 const int RECONNECT_DELAY_MS = 2000;
-const wchar_t MAIN_WINDOW_TITLE[] = L"IRPffmpeg v1.2.1";
+const wchar_t MAIN_WINDOW_TITLE[] = L"IRPffmpeg v1.2.2";
 
 #define ID_TIMER_IMAGE_URL 3
 #define ID_TIMER_METADATA 4
@@ -114,6 +114,10 @@ bool g_enableIcyStationNameUpdates = true;
 bool g_minimizeToTray = true;
 bool g_showTrackToast = true;
 bool g_compactModeAlwaysOnTop = true;
+bool g_compactModeWithoutSpectrum = false;
+bool g_compactModePositionSaved = false;
+int g_compactModeX = 0;
+int g_compactModeY = 0;
 bool g_trackToastPositionSaved = false;
 int g_trackToastX = 0;
 int g_trackToastY = 0;
@@ -1080,6 +1084,16 @@ static std::wstring GetCompactModeTitleText()
     return GetNowPlayingTitleText();
 }
 
+static std::wstring GetCompactModeElapsedText()
+{
+    return g_nowPlayingElapsed;
+}
+
+static bool IsCompactModePlaybackRunning()
+{
+    return running.load();
+}
+
 static void RefreshCompactModeTooltips(HWND hDlg)
 {
     SetupMainDialogTooltips(hDlg);
@@ -1089,6 +1103,14 @@ static void InvalidateCompactModeNormalText(HWND hDlg)
 {
     InvalidateNowPlayingBar(hDlg);
 }
+
+static void RememberCompactModePosition(int x, int y)
+{
+    g_compactModePositionSaved = true;
+    g_compactModeX = x;
+    g_compactModeY = y;
+}
+
 static std::string TrimAsciiCopy(std::string value)
 {
     auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
@@ -1249,6 +1271,7 @@ static void ApplySettingsDialogLanguage(HWND hDlg)
     SetDlgItemTextW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, Tr("settings.program.minimize_to_tray", L" При минимизации отправлять в трей"));
     SetDlgItemTextW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, Tr("settings.program.show_track_toast", L" В трее и компактном режиме показывать обложку"));
     SetDlgItemTextW(hDlg, IDC_CHECK_COMPACT_ALWAYS_ON_TOP, Tr("settings.program.compact_always_on_top", L" Компактный режим поверх всех окон"));
+    SetDlgItemTextW(hDlg, IDC_CHECK_COMPACT_WITHOUT_SPECTRUM, Tr("settings.program.compact_without_spectrum", L" Без спектрограммы в компактном режиме"));
 }
 
 static void ApplyMainDialogLanguage(HWND hDlg)
@@ -1272,7 +1295,7 @@ static void SetupMainDialogTooltips(HWND hDlg)
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_PREVIOUS_STATION), Tr("tooltip.previous_station", L"Вернуться к ранее звучавшей станции"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_REC), Tr("tooltip.record", L"Начать или остановить запись текущего потока"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_VOLUME), Tr("tooltip.volume", L"Громкость"));
-    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_EQ), Tr("tooltip.equalizer", L"Открыть пятиполосный параметрический эквалайзер"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_EQ), Tr("tooltip.equalizer", L"Открыть шестиполосный параметрический эквалайзер"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_ST_SETTING), Tr("tooltip.settings", L"Открыть настройки программы"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_COMPACT_PREVIOUS), Tr("tooltip.previous_station", L"Вернуться к ранее звучавшей станции"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_BUTTON_COMPACT_RESTORE), Tr("tooltip.compact.restore", L"Вернуться в обычный режим"));
@@ -1292,6 +1315,7 @@ static void SetupSettingsDialogTooltips(HWND hDlg)
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY), Tr("tooltip.program.minimize_to_tray", L"При нажатии кнопки свернуть прятать программу в трей"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_SHOW_TRACK_TOAST), Tr("tooltip.program.show_track_toast", L"Когда программа в трее или компактном режиме, показывать обложку при смене трека"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_COMPACT_ALWAYS_ON_TOP), Tr("tooltip.program.compact_always_on_top", L"В компактном режиме держать окно поверх других окон"));
+    AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDC_CHECK_COMPACT_WITHOUT_SPECTRUM), Tr("tooltip.program.compact_without_spectrum", L"Скрыть спектрограмму в компактном режиме и оставить строку текущего трека с кнопками"));
     AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDOK), Tr("tooltip.settings.ok", L"Сохранить настройки и закрыть окно"));
 }
 
@@ -2991,6 +3015,7 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
         SendDlgItemMessageW(hDlg, IDC_CHECK_MINIMIZE_TO_TRAY, BM_SETCHECK, g_minimizeToTray ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_SHOW_TRACK_TOAST, BM_SETCHECK, g_showTrackToast ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(hDlg, IDC_CHECK_COMPACT_ALWAYS_ON_TOP, BM_SETCHECK, g_compactModeAlwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendDlgItemMessageW(hDlg, IDC_CHECK_COMPACT_WITHOUT_SPECTRUM, BM_SETCHECK, g_compactModeWithoutSpectrum ? BST_CHECKED : BST_UNCHECKED, 0);
         SetDlgItemInt(hDlg, IDC_EDIT_STEREO_WIDTH, static_cast<UINT>((std::max)(0, (std::min)(100, g_stereoWidthPercent))), FALSE);
 
         if (HWND hEditStereo = GetDlgItem(hDlg, IDC_EDIT_STEREO_WIDTH)) {
@@ -3126,6 +3151,15 @@ INT_PTR CALLBACK SettingsDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPAR
                 g_compactModeAlwaysOnTop =
                     (SendDlgItemMessageW(hDlg, IDC_CHECK_COMPACT_ALWAYS_ON_TOP, BM_GETCHECK, 0, 0) == BST_CHECKED);
                 CompactModeSetAlwaysOnTop(g_hMainWnd, g_compactModeAlwaysOnTop);
+            }
+            return (INT_PTR)TRUE;
+
+        case IDC_CHECK_COMPACT_WITHOUT_SPECTRUM:
+            if (notif == BN_CLICKED)
+            {
+                g_compactModeWithoutSpectrum =
+                    (SendDlgItemMessageW(hDlg, IDC_CHECK_COMPACT_WITHOUT_SPECTRUM, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                CompactModeSetWithoutSpectrum(g_hMainWnd, g_compactModeWithoutSpectrum);
             }
             return (INT_PTR)TRUE;
 
@@ -3315,9 +3349,12 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         SetupMainDialogTooltips(hDlg);
         CompactModeCallbacks compactCallbacks;
         compactCallbacks.getTitleText = GetCompactModeTitleText;
+        compactCallbacks.getElapsedText = GetCompactModeElapsedText;
+        compactCallbacks.isPlaybackRunning = IsCompactModePlaybackRunning;
         compactCallbacks.refreshTooltips = RefreshCompactModeTooltips;
         compactCallbacks.invalidateNormalText = InvalidateCompactModeNormalText;
         compactCallbacks.showContextMenu = ShowCompactContextMenu;
+        compactCallbacks.rememberPosition = RememberCompactModePosition;
         CompactModeConfigure(hDlg, g_hStatic, hListboxFont, hButtonFont, compactCallbacks);
         CompactModeInstallCoverSubclass(hDlg);
 
@@ -3328,6 +3365,11 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             loadPlaylist(L"playlist.m3u", playlist);
         }
         CompactModeSetAlwaysOnTop(hDlg, g_compactModeAlwaysOnTop);
+        CompactModeSetWithoutSpectrum(hDlg, g_compactModeWithoutSpectrum);
+        CompactModeSetSavedPosition(
+            g_compactModePositionSaved,
+            g_compactModeX,
+            g_compactModeY);
         if (!LoadLanguageById(g_languageId)) {
             g_languageId = L"russian";
             LoadLanguageById(g_languageId);

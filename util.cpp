@@ -53,6 +53,7 @@ static AVFrame* showcqt_frame = nullptr;
 static std::mutex showcqt_mutex;
 static std::vector<float> showcqt_audio_buffer;
 static size_t showcqt_audio_read_pos = 0;
+static std::atomic<bool> showcqt_processing_enabled{ true };
 std::atomic<bool> showcqt_running{ false };
 std::thread showcqt_thread;
 std::vector<std::wstring> vec_url;
@@ -444,6 +445,10 @@ static constexpr char kPlaylistIcyFlagsMagic[] = "ICYF001";
 static constexpr char kLufsGainNormalizerMagic[] = "LUFS001";
 static constexpr char kCompactAlwaysOnTopMagic[] = "COTP001";
 static constexpr char kParametricEqMagic[] = "PEQ5001";
+static constexpr char kCompactWithoutSpectrumMagic[] = "CNSP001";
+static constexpr char kCompactWindowPositionMagic[] = "CPOS001";
+static constexpr int kLegacyParametricEqBandCount = 5;
+static constexpr int kFiveKhzBandIndex = 3;
 
 void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistItem>& playlist, int selectedIndex) {
     std::ofstream ofs(filename, std::ios::binary);
@@ -507,6 +512,14 @@ void savePlaylistToDat(const std::wstring& filename, const std::vector<PlaylistI
         ofs.write(reinterpret_cast<const char*>(&gainDb), sizeof(gainDb));
         ofs.write(reinterpret_cast<const char*>(&q), sizeof(q));
     }
+
+    ofs.write(kCompactWithoutSpectrumMagic, sizeof(kCompactWithoutSpectrumMagic));
+    ofs.write(reinterpret_cast<const char*>(&g_compactModeWithoutSpectrum), sizeof(g_compactModeWithoutSpectrum));
+
+    ofs.write(kCompactWindowPositionMagic, sizeof(kCompactWindowPositionMagic));
+    ofs.write(reinterpret_cast<const char*>(&g_compactModePositionSaved), sizeof(g_compactModePositionSaved));
+    ofs.write(reinterpret_cast<const char*>(&g_compactModeX), sizeof(g_compactModeX));
+    ofs.write(reinterpret_cast<const char*>(&g_compactModeY), sizeof(g_compactModeY));
 }
 
 bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>& playlist, int& selectedIndex) {
@@ -736,10 +749,49 @@ bool loadPlaylistFromDat(const std::wstring& filename, std::vector<PlaylistItem>
                 if (ifs.fail()) {
                     break;
                 }
-                if (band < kParametricEqBandCount) {
-                    StoreParametricEqBand(band, gainDb, q);
+                int targetBand = band;
+                if (eqBandCount == kLegacyParametricEqBandCount &&
+                    kParametricEqBandCount == 6 &&
+                    band >= kFiveKhzBandIndex) {
+                    ++targetBand;
+                }
+                if (targetBand < kParametricEqBandCount) {
+                    StoreParametricEqBand(targetBand, gainDb, q);
                 }
             }
+        }
+    }
+    if (ifs.fail()) {
+        ifs.clear();
+    }
+
+    char compactWithoutSpectrumMagic[sizeof(kCompactWithoutSpectrumMagic)] = {};
+    ifs.read(compactWithoutSpectrumMagic, sizeof(compactWithoutSpectrumMagic));
+    if (!ifs.fail() && memcmp(compactWithoutSpectrumMagic, kCompactWithoutSpectrumMagic, sizeof(kCompactWithoutSpectrumMagic)) == 0) {
+        bool compactWithoutSpectrum = g_compactModeWithoutSpectrum;
+        ifs.read(reinterpret_cast<char*>(&compactWithoutSpectrum), sizeof(compactWithoutSpectrum));
+        if (!ifs.fail()) {
+            g_compactModeWithoutSpectrum = compactWithoutSpectrum;
+        }
+    }
+    if (ifs.fail()) {
+        ifs.clear();
+    }
+
+    char compactWindowPositionMagic[sizeof(kCompactWindowPositionMagic)] = {};
+    ifs.read(compactWindowPositionMagic, sizeof(compactWindowPositionMagic));
+    if (!ifs.fail() &&
+        memcmp(compactWindowPositionMagic, kCompactWindowPositionMagic, sizeof(kCompactWindowPositionMagic)) == 0) {
+        bool compactModePositionSaved = g_compactModePositionSaved;
+        int compactModeX = g_compactModeX;
+        int compactModeY = g_compactModeY;
+        ifs.read(reinterpret_cast<char*>(&compactModePositionSaved), sizeof(compactModePositionSaved));
+        ifs.read(reinterpret_cast<char*>(&compactModeX), sizeof(compactModeX));
+        ifs.read(reinterpret_cast<char*>(&compactModeY), sizeof(compactModeY));
+        if (!ifs.fail()) {
+            g_compactModePositionSaved = compactModePositionSaved;
+            g_compactModeX = compactModeX;
+            g_compactModeY = compactModeY;
         }
     }
     if (ifs.fail()) {
@@ -3218,7 +3270,8 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
 }
 
 void ProcessAudioForShowCQT(const float* audio_data, int samples, int sample_rate, int channels) {
-    if (!showcqt_running.load() || !audio_data || samples <= 0 || sample_rate <= 0 || channels <= 0) return;
+    if (!showcqt_running.load() || !showcqt_processing_enabled.load(std::memory_order_relaxed) ||
+        !audio_data || samples <= 0 || sample_rate <= 0 || channels <= 0) return;
 
     std::unique_lock<std::mutex> lock(showcqt_mutex, std::try_to_lock);
     if (!lock.owns_lock()) {
@@ -3304,6 +3357,15 @@ void InitShowCQT() {
 
 void CleanupShowCQT() {
     showcqt_running.store(false);
+}
+
+void SetShowCQTProcessingEnabled(bool enabled) {
+    showcqt_processing_enabled.store(enabled, std::memory_order_relaxed);
+    if (!enabled) {
+        std::lock_guard<std::mutex> lock(showcqt_mutex);
+        showcqt_audio_buffer.clear();
+        showcqt_audio_read_pos = 0;
+    }
 }
 
 // Эта функция будет вызываться ИЗ потока ShowCQTTh
@@ -3491,6 +3553,12 @@ void ShowCQTThread() {
         }
 
         if (!showcqt_running.load()) break;
+
+        if (!showcqt_processing_enabled.load(std::memory_order_relaxed)) {
+            next_frame_time = (double)SDL_GetTicks() + frame_delay;
+            SDL_Delay(10);
+            continue;
+        }
 
         RECT parentClient = {};
         if (GetClientRect(hSSdl, &parentClient)) {

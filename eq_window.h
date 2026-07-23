@@ -6,7 +6,7 @@
 #endif
 #include <windows.h>
 
-constexpr int kParametricEqBandCount = 5;
+constexpr int kParametricEqBandCount = 6;
 
 extern const float g_parametricEqFrequenciesHz[kParametricEqBandCount];
 extern std::atomic<float> g_parametricEqGainDb[kParametricEqBandCount];

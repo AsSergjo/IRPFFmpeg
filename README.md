@@ -14,11 +14,15 @@ Main window: playlist management, playback controls, stream status, cover art, h
 
 ![IRPFFmpeg parametric equalizer](equalizer_window.png)
 
-Parametric equalizer: five bands with independent Gain/Q controls and a live graph of the resulting frequency response.
+Parametric equalizer: six bands with independent Gain/Q controls and a live graph of the resulting frequency response.
 
 ![IRPFFmpeg compact mode](compact_mode.png)
 
 Compact mode: a small spectrum window with the current track line, previous-station button and restore-to-normal button.
+
+![IRPFFmpeg compact mode without spectrum](compact_mode_without_spektr.png)
+
+Spectrum-free compact mode: elapsed playback time, current track and controls in a single narrow row.
 
 ![IRPFFmpeg settings window](window_programm_setting.png)
 
@@ -36,11 +40,13 @@ Settings window: language selection, audio processing modules, tray behavior, co
 - record the current broadcast to `Rec`;
 - export recordings to MP3 320 kbit/sec or FLAC;
 - write metadata and cover art to recordings when available;
-- adjust volume from the dedicated arc control and tune a five-band parametric equalizer with a live summed frequency-response graph;
+- adjust volume from the dedicated arc control and tune a six-band parametric equalizer with a live summed frequency-response graph;
 - Stereo Width, Exciter, DeepBass, Speech Intelligibility Compressor, Station LUFS Normalizer, GainRider and final limiter;
 - minimize to the system tray;
-- compact mode with spectrum visualization, current track text, previous-station button and restore-to-normal button;
+- compact mode with spectrum visualization, elapsed playback time, current track text, previous-station button and restore-to-normal button;
 - optional always-on-top behavior for the compact window;
+- optional spectrum-free compact mode that keeps only the current-track bar and controls;
+- persistent compact-window position across mode changes and application restarts;
 - show a cover/title popup on track change while the app is in the tray or compact mode;
 - choose the interface language: Russian or English;
 - launch through `Start_IRPFFmpeg.exe`, which checks runtime DLLs and starts the main app.
@@ -58,7 +64,7 @@ It is better not to run `IRPFFmpeg.exe` directly: the main application needs lib
 Recommended download flow from GitHub Releases:
 
 1. Download the DLL support archive `IRPFFmpeg-support-win-x64.zip` once if you do not already have a `heap_dll` folder with third-party DLLs.
-2. Download the project archive for the current version, for example `IRPFFmpeg-v1.2.1-project-win-x64.zip`.
+2. Download the project archive for the current version, for example `IRPFFmpeg-v1.2.2-project-win-x64.zip`.
 3. Extract both archives into the same folder.
 4. Run `Start_IRPFFmpeg.exe`.
 

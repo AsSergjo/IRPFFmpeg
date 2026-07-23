@@ -15,15 +15,15 @@
 #pragma comment(lib, "gdiplus.lib")
 
 const float g_parametricEqFrequenciesHz[kParametricEqBandCount] = {
-    30.0f, 200.0f, 2000.0f, 10000.0f, 16000.0f
+    30.0f, 200.0f, 2000.0f, 5000.0f, 10000.0f, 16000.0f
 };
 
 std::atomic<float> g_parametricEqGainDb[kParametricEqBandCount] = {
-    2.0f, 0.0f, 0.0f, 3.0f, 10.0f
+    2.0f, 0.0f, 0.0f, 0.0f, 3.0f, 10.0f
 };
 
 std::atomic<float> g_parametricEqQ[kParametricEqBandCount] = {
-    0.80f, 1.00f, 1.00f, 1.00f, 0.80f
+    0.80f, 1.00f, 1.00f, 1.00f, 1.00f, 0.80f
 };
 
 namespace
@@ -31,7 +31,7 @@ namespace
 constexpr wchar_t kEqWindowClass[] = L"IRPFFmpegParametricEqWindow";
 constexpr wchar_t kEqKnobClass[] = L"IRPFFmpegParametricEqKnob";
 
-constexpr int kEqWindowWidth = 604;
+constexpr int kEqWindowWidth = 620;
 constexpr int kEqWindowHeight = 458;
 constexpr int kEqContentMargin = 8;
 constexpr int kFrequencyTextY = 4;

@@ -38,8 +38,8 @@ IDI_SMALL               ICON                    "small.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,2,1,0
- PRODUCTVERSION 1,2,1,0
+ FILEVERSION 1,2,2,0
+ PRODUCTVERSION 1,2,2,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x3L
@@ -56,11 +56,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "IRPFFmpeg"
             VALUE "FileDescription", "IRPFFmpeg internet radio player"
-            VALUE "FileVersion", "1.2.1.0"
+            VALUE "FileVersion", "1.2.2.0"
             VALUE "InternalName", "IRPFFmpeg"
             VALUE "OriginalFilename", "IRPFFmpeg.exe"
             VALUE "ProductName", "IRPFFmpeg"
-            VALUE "ProductVersion", "1.2.1.0"
+            VALUE "ProductVersion", "1.2.2.0"
             VALUE "LegalCopyright", "Copyright (c) 2026"
         END
     END
@@ -116,11 +116,11 @@ END
 
 IDD_ABOUTBOX DIALOGEX 0, 0, 190, 78
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CLIPCHILDREN | WS_CAPTION | WS_SYSMENU
-CAPTION "IRPffmpeg v1.2.1"
+CAPTION "IRPffmpeg v1.2.2"
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
     ICON            IDI_IRPFFMPEG,IDC_STATIC,14,14,21,20
-    LTEXT           "IRPffmpeg v1.2.1",IDC_STATIC,42,14,130,8,SS_NOPREFIX
+    LTEXT           "IRPffmpeg v1.2.2",IDC_STATIC,42,14,130,8,SS_NOPREFIX
     LTEXT           "(c) 2026",IDC_STATIC,42,26,114,8
     CONTROL         "<a href=""https://github.com/AsSergjo/IRPFFmpeg"">GitHub repository</a>",IDC_ABOUT_GITHUB,
                     "SysLink",WS_TABSTOP,42,38,120,12
@@ -129,7 +129,7 @@ END
 
 IDD_MAIN_DIALOG DIALOGEX 0, 0, 693, 313
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_MINIMIZEBOX | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "IRPffmpeg v1.2.1"
+CAPTION "IRPffmpeg v1.2.2"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     CONTROL         "",IDC_STATIC_IMG,"Static",SS_OWNERDRAW | WS_BORDER,4,4,331,305
@@ -147,12 +147,12 @@ BEGIN
     CONTROL         "",IDC_ST_SETTING,"Button",BS_OWNERDRAW | WS_TABSTOP,633,285,36,24
 END
 
-IDD_DIALOG_SETTING DIALOGEX 0, 0, 255, 244
+IDD_DIALOG_SETTING DIALOGEX 0, 0, 255, 257
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 FONT 10, "Segoe UI", 400, 0, 0x1
 BEGIN
     CTEXT           "Настройки",IDC_SETTINGWND_TITLE,7,0,241,15
-    DEFPUSHBUTTON   "OK",IDOK,99,220,50,14
+    DEFPUSHBUTTON   "OK",IDOK,99,233,50,14
     GROUPBOX        " Режимы записи ",IDC_GROUP_RECORDING,7,15,241,28
     CONTROL         " MP3, LAME, 320 kbit/sec",IDC_CHECK_MP3,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,28,96,10
     CONTROL         " FLAC, s16, ~1000 kbit/sec",IDC_CHECK_FLAC,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,133,28,96,10
@@ -168,15 +168,17 @@ BEGIN
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,107,210,10
     CONTROL         " GainRider / Контроль Пиков",IDC_CHECK_LIMITER_GAIN_RIDER,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,120,210,10
-    GROUPBOX        " Настройки программы ",IDC_GROUP_PROGRAM,7,140,241,77
+    GROUPBOX        " Настройки программы ",IDC_GROUP_PROGRAM,7,140,241,90
     CONTROL         " При минимизации отправлять в трей",IDC_CHECK_MINIMIZE_TO_TRAY,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,152,210,10
     CONTROL         " В трее и компактном режиме показывать обложку",IDC_CHECK_SHOW_TRACK_TOAST,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,165,225,10
     CONTROL         " Компактный режим поверх всех окон",IDC_CHECK_COMPACT_ALWAYS_ON_TOP,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,178,225,10
-    LTEXT           "Язык:",IDC_STATIC_LANGUAGE,20,197,45,8
-    COMBOBOX        IDC_COMBO_LANGUAGE,68,194,160,45,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL         " Без спектрограммы в компактном режиме",IDC_CHECK_COMPACT_WITHOUT_SPECTRUM,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,20,191,225,10
+    LTEXT           "Язык:",IDC_STATIC_LANGUAGE,20,210,45,8
+    COMBOBOX        IDC_COMBO_LANGUAGE,68,207,160,45,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 END
 
 
@@ -215,7 +217,7 @@ BEGIN
         RIGHTMARGIN, 248
         VERTGUIDE, 21
         TOPMARGIN, 7
-        BOTTOMMARGIN, 225
+        BOTTOMMARGIN, 238
     END
 END
 #endif    // APSTUDIO_INVOKED
@@ -254,7 +256,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APP_TITLE           "IRPffmpeg v1.2.1"
+    IDS_APP_TITLE           "IRPffmpeg v1.2.2"
     IDC_IRPFFMPEG           "IRPFFMPEG"
 END
 

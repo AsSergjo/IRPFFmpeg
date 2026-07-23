@@ -66,7 +66,7 @@ static bool is_image_url_valid(const std::wstring& url)
                 DWORD sizeLen = sizeof(fileSize);
                 if (HttpQueryInfoW(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &fileSize, &sizeLen, nullptr))
                 {
-                    isValid = (fileSize > 20000 && fileSize < 1000000);
+                    isValid = (fileSize > 35000 && fileSize < 1000000);
                 }
             }
         }

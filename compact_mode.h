@@ -7,9 +7,12 @@ constexpr UINT IDT_COMPACT_TITLE_SCROLL = 7;
 
 struct CompactModeCallbacks {
     std::wstring (*getTitleText)() = nullptr;
+    std::wstring (*getElapsedText)() = nullptr;
+    bool (*isPlaybackRunning)() = nullptr;
     void (*refreshTooltips)(HWND hDlg) = nullptr;
     void (*invalidateNormalText)(HWND hDlg) = nullptr;
     void (*showContextMenu)(HWND hDlg, POINT pt) = nullptr;
+    void (*rememberPosition)(int x, int y) = nullptr;
 };
 
 void CompactModeConfigure(
@@ -23,6 +26,8 @@ bool CompactModeIsActive();
 void CompactModeEnter(HWND hDlg);
 void CompactModeExit(HWND hDlg);
 void CompactModeSetAlwaysOnTop(HWND hDlg, bool enabled);
+void CompactModeSetWithoutSpectrum(HWND hDlg, bool enabled);
+void CompactModeSetSavedPosition(bool saved, int x, int y);
 void CompactModeApplyZOrder(HWND hDlg);
 void CompactModeBeginDrag(HWND hDlg);
 bool CompactModeHandleMouseMove(HWND hDlg);

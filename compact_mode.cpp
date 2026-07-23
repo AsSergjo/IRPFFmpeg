@@ -14,8 +14,12 @@
 static constexpr int kCompactClientWidth = 420;
 static constexpr int kCompactClientHeight = 150;
 static constexpr int kCompactBottomBarHeight = 30;
+static constexpr int kCompactWithoutSpectrumClientHeight = kCompactBottomBarHeight;
 static constexpr int kCompactMinClientWidth = 330;
 static constexpr int kCompactMinClientHeight = 118;
+static constexpr int kCompactElapsedPaddingPx = 2;
+static constexpr int kCompactElapsedDividerGapPx = 4;
+static constexpr wchar_t kCompactElapsedDividerGlyph[] = L"\uE76C";
 static constexpr UINT kTitleScrollTimerMs = 30;
 static constexpr ULONGLONG kTitleScrollPauseMs = 3000;
 static constexpr int kTitleScrollEndPaddingPx = 2;
@@ -48,12 +52,16 @@ static LONG_PTR g_normalWindowExStyle = 0;
 static bool g_normalWindowPlacementSaved = false;
 static bool g_normalWindowWasTopmost = false;
 static bool g_compactAlwaysOnTop = true;
+static bool g_compactWithoutSpectrum = false;
+static bool g_compactPositionSaved = false;
+static POINT g_compactPosition = {};
 static HWND g_hSpectrumHost = nullptr;
 static HWND g_hCompactTitle = nullptr;
 static HWND g_hCompactPreviousButton = nullptr;
 static HWND g_hCompactRestoreButton = nullptr;
 static HFONT g_hTitleFont = nullptr;
 static HFONT g_hIconFont = nullptr;
+static HFONT g_hElapsedDividerFont = nullptr;
 static CompactModeCallbacks g_callbacks;
 static std::vector<ControlLayoutSnapshot> g_normalControlLayout;
 static int g_compactTitleScrollPosPx = 0;
@@ -136,7 +144,7 @@ static bool* GetCompactButtonHotFlag(HWND hWnd)
 
 static bool IsCompactTitleDoubleClick(HWND hWnd, LPARAM lParam)
 {
-    DWORD now = GetTickCount();
+    DWORD now = (DWORD)GetTickCount64();
     POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
     ClientToScreen(hWnd, &pt);
 
@@ -203,6 +211,10 @@ static LRESULT CALLBACK CompactTitleSubclassProc(
         break;
 
     case WM_NCDESTROY:
+        if (g_hElapsedDividerFont) {
+            DeleteObject(g_hElapsedDividerFont);
+            g_hElapsedDividerFont = nullptr;
+        }
         RemoveWindowSubclass(hWnd, CompactTitleSubclassProc, subclassId);
         break;
     }
@@ -280,6 +292,78 @@ static std::wstring GetCompactTitleText()
         return g_callbacks.getTitleText();
     }
     return std::wstring();
+}
+
+static HFONT GetCompactIconFont()
+{
+    return g_hIconFont
+        ? g_hIconFont
+        : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+}
+
+static HFONT GetCompactElapsedDividerFont()
+{
+    if (!g_hElapsedDividerFont && g_hIconFont) {
+        LOGFONTW lf = {};
+        if (GetObjectW(g_hIconFont, sizeof(lf), &lf)) {
+            lf.lfHeight = MulDiv(lf.lfHeight, 60, 100);
+            if (lf.lfHeight == 0) {
+                lf.lfHeight = 1;
+            }
+            g_hElapsedDividerFont = CreateFontIndirectW(&lf);
+        }
+    }
+
+    return g_hElapsedDividerFont ? g_hElapsedDividerFont : GetCompactIconFont();
+}
+
+static std::wstring GetCompactElapsedText()
+{
+    if (g_callbacks.getElapsedText) {
+        return g_callbacks.getElapsedText();
+    }
+    return std::wstring();
+}
+
+static bool IsCompactPlaybackRunning()
+{
+    return g_callbacks.isPlaybackRunning && g_callbacks.isPlaybackRunning();
+}
+
+static std::wstring GetCompactElapsedDisplayText()
+{
+    std::wstring elapsed = GetCompactElapsedText();
+    if (elapsed.empty()) {
+        elapsed = IsCompactPlaybackRunning() ? L"00:00" : L"--:--";
+    }
+    return elapsed;
+}
+
+static int GetCompactElapsedAreaWidthPx(HDC hdc, const std::wstring& elapsed)
+{
+    const int hourFormatWidth = MeasureTextWidthPx(hdc, L"0:00:00");
+    const int elapsedWidth = MeasureTextWidthPx(hdc, elapsed);
+    return (std::max)(hourFormatWidth, elapsedWidth) + 2 * kCompactElapsedPaddingPx;
+}
+
+static int GetCompactElapsedDividerWidthPx(HDC hdc)
+{
+    HFONT hOldFont = reinterpret_cast<HFONT>(SelectObject(hdc, GetCompactElapsedDividerFont()));
+    const int dividerWidth = MeasureTextWidthPx(hdc, kCompactElapsedDividerGlyph);
+    SelectObject(hdc, hOldFont);
+    return dividerWidth;
+}
+
+static RECT GetCompactScrollingTitleRect(
+    const RECT& clientRect,
+    int elapsedAreaWidth,
+    int dividerWidth)
+{
+    RECT textRect = clientRect;
+    textRect.left += elapsedAreaWidth +
+        kCompactElapsedDividerGapPx + dividerWidth + kCompactElapsedDividerGapPx;
+    textRect.right -= 4;
+    return textRect;
 }
 
 static void ChangeCompactTitleScrollState(CompactTitleScrollState state)
@@ -407,14 +491,20 @@ static void EnsureCompactControls(HWND hDlg)
 static void ClampWindowToWorkArea(int& x, int& y, int width, int height)
 {
     RECT work = {};
-    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
+    POINT windowOrigin = { x, y };
+    HMONITOR monitor = MonitorFromPoint(windowOrigin, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitorInfo = { sizeof(monitorInfo) };
+    if (monitor && GetMonitorInfoW(monitor, &monitorInfo)) {
+        work = monitorInfo.rcWork;
+    }
+    else if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
         return;
     }
 
-    if (x + width > work.right) {
+    if (x > work.right - width) {
         x = work.right - width;
     }
-    if (y + height > work.bottom) {
+    if (y > work.bottom - height) {
         y = work.bottom - height;
     }
     if (x < work.left) {
@@ -517,15 +607,34 @@ static void DrawCompactTitle(HWND hWnd, HDC hdc)
         ResetCompactTitleScroll(title);
     }
 
-    RECT textRc = localRc;
-    textRc.left += 2;
-    textRc.right -= 4;
-
     SetBkMode(memDC, TRANSPARENT);
-    SetTextColor(memDC, RGB(10, 18, 32));
     HFONT hOldFont = reinterpret_cast<HFONT>(SelectObject(
         memDC,
         GetCompactTitleFont()));
+
+    const bool playbackRunning = IsCompactPlaybackRunning();
+    const std::wstring elapsed = GetCompactElapsedDisplayText();
+    const int elapsedAreaWidth = GetCompactElapsedAreaWidthPx(memDC, elapsed);
+    const int dividerWidth = GetCompactElapsedDividerWidthPx(memDC);
+
+    RECT elapsedRc = localRc;
+    elapsedRc.left += kCompactElapsedPaddingPx;
+    elapsedRc.right = localRc.left + elapsedAreaWidth - kCompactElapsedPaddingPx;
+    SetTextColor(memDC, playbackRunning ? RGB(25, 96, 142) : RGB(126, 133, 143));
+    DrawTextW(memDC, elapsed.c_str(), -1, &elapsedRc,
+        DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    RECT dividerRc = localRc;
+    dividerRc.left = localRc.left + elapsedAreaWidth + kCompactElapsedDividerGapPx;
+    dividerRc.right = dividerRc.left + dividerWidth;
+    HFONT hPreviousFont = reinterpret_cast<HFONT>(SelectObject(memDC, GetCompactElapsedDividerFont()));
+    SetTextColor(memDC, RGB(112, 121, 133));
+    DrawTextW(memDC, kCompactElapsedDividerGlyph, -1, &dividerRc,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(memDC, hPreviousFont);
+
+    RECT textRc = GetCompactScrollingTitleRect(localRc, elapsedAreaWidth, dividerWidth);
+    SetTextColor(memDC, RGB(10, 18, 32));
 
     const int textWidth = MeasureTextWidthPx(memDC, title);
     const int availableWidth = (std::max)(1, static_cast<int>(textRc.right - textRc.left));
@@ -646,6 +755,10 @@ void CompactModeConfigure(
 {
     g_hSpectrumHost = hSpectrumHost;
     g_hTitleFont = hTitleFont;
+    if (g_hIconFont != hIconFont && g_hElapsedDividerFont) {
+        DeleteObject(g_hElapsedDividerFont);
+        g_hElapsedDividerFont = nullptr;
+    }
     g_hIconFont = hIconFont;
     g_callbacks = callbacks;
 }
@@ -666,8 +779,12 @@ void CompactModeLayout(HWND hDlg)
 
     const int clientWidth = (std::max)(1, static_cast<int>(rcClient.right - rcClient.left));
     const int clientHeight = (std::max)(1, static_cast<int>(rcClient.bottom - rcClient.top));
-    const int bottomHeight = (std::min)(kCompactBottomBarHeight, (std::max)(24, clientHeight / 3));
-    const int spectrumHeight = (std::max)(48, clientHeight - bottomHeight);
+    const int bottomHeight = g_compactWithoutSpectrum
+        ? clientHeight
+        : (std::min)(kCompactBottomBarHeight, (std::max)(24, clientHeight / 3));
+    const int spectrumHeight = g_compactWithoutSpectrum
+        ? 0
+        : (std::max)(48, clientHeight - bottomHeight);
     const int buttonSize = (std::min)(34, (std::max)(26, bottomHeight - 4));
     const int buttonMargin = 3;
     const int buttonGap = 2;
@@ -679,8 +796,13 @@ void CompactModeLayout(HWND hDlg)
     const int titleRight = previousButtonX - 4;
 
     if (g_hSpectrumHost) {
-        MoveWindow(g_hSpectrumHost, 0, 0, clientWidth, spectrumHeight, TRUE);
-        ShowWindow(g_hSpectrumHost, SW_SHOW);
+        if (g_compactWithoutSpectrum) {
+            ShowWindow(g_hSpectrumHost, SW_HIDE);
+        }
+        else {
+            MoveWindow(g_hSpectrumHost, 0, 0, clientWidth, spectrumHeight, TRUE);
+            ShowWindow(g_hSpectrumHost, SW_SHOW);
+        }
     }
 
     if (g_hCompactTitle) {
@@ -711,13 +833,17 @@ void CompactModeDrawChrome(HWND hDlg, HDC hdc)
     RECT rcClient = {};
     GetClientRect(hDlg, &rcClient);
     const int clientHeight = rcClient.bottom - rcClient.top;
-    const int bottomTop = (std::max)(0, clientHeight - kCompactBottomBarHeight);
+    const int bottomTop = g_compactWithoutSpectrum
+        ? 0
+        : (std::max)(0, clientHeight - kCompactBottomBarHeight);
 
-    RECT rcSpectrum = rcClient;
-    rcSpectrum.bottom = bottomTop;
-    HBRUSH hBlack = CreateSolidBrush(RGB(0, 0, 0));
-    FillRect(hdc, &rcSpectrum, hBlack);
-    DeleteObject(hBlack);
+    if (bottomTop > 0) {
+        RECT rcSpectrum = rcClient;
+        rcSpectrum.bottom = bottomTop;
+        HBRUSH hBlack = CreateSolidBrush(RGB(0, 0, 0));
+        FillRect(hdc, &rcSpectrum, hBlack);
+        DeleteObject(hBlack);
+    }
 
     RECT rcBar = rcClient;
     rcBar.top = bottomTop;
@@ -725,12 +851,14 @@ void CompactModeDrawChrome(HWND hDlg, HDC hdc)
     FillRect(hdc, &rcBar, hBar);
     DeleteObject(hBar);
 
-    HPEN hLinePen = CreatePen(PS_SOLID, 1, RGB(224, 228, 234));
-    HPEN hOldPen = reinterpret_cast<HPEN>(SelectObject(hdc, hLinePen));
-    MoveToEx(hdc, rcClient.left, bottomTop, nullptr);
-    LineTo(hdc, rcClient.right, bottomTop);
-    SelectObject(hdc, hOldPen);
-    DeleteObject(hLinePen);
+    if (bottomTop > 0) {
+        HPEN hLinePen = CreatePen(PS_SOLID, 1, RGB(224, 228, 234));
+        HPEN hOldPen = reinterpret_cast<HPEN>(SelectObject(hdc, hLinePen));
+        MoveToEx(hdc, rcClient.left, bottomTop, nullptr);
+        LineTo(hdc, rcClient.right, bottomTop);
+        SelectObject(hdc, hOldPen);
+        DeleteObject(hLinePen);
+    }
 }
 
 void CompactModeAdvanceTitleScroll(HWND)
@@ -741,7 +869,6 @@ void CompactModeAdvanceTitleScroll(HWND)
 
     RECT rc = {};
     GetClientRect(g_hCompactTitle, &rc);
-    const int availableWidth = (std::max)(1, static_cast<int>(rc.right - rc.left - 6));
 
     HDC hdc = GetDC(g_hCompactTitle);
     if (!hdc) {
@@ -751,6 +878,11 @@ void CompactModeAdvanceTitleScroll(HWND)
     HFONT hOldFont = reinterpret_cast<HFONT>(SelectObject(
         hdc,
         GetCompactTitleFont()));
+    const std::wstring elapsed = GetCompactElapsedDisplayText();
+    const int elapsedAreaWidth = GetCompactElapsedAreaWidthPx(hdc, elapsed);
+    const int dividerWidth = GetCompactElapsedDividerWidthPx(hdc);
+    const RECT titleRc = GetCompactScrollingTitleRect(rc, elapsedAreaWidth, dividerWidth);
+    const int availableWidth = (std::max)(1, static_cast<int>(titleRc.right - titleRc.left));
     std::wstring title = GetCompactTitleText();
     const int textWidth = MeasureTextWidthPx(hdc, title);
     const int maxScrollPos = (std::max)(0, textWidth - availableWidth + kTitleScrollEndPaddingPx);
@@ -832,7 +964,10 @@ bool CompactModeHandleGetMinMaxInfo(HWND hDlg, LPARAM lParam)
 
     MINMAXINFO* minMax = reinterpret_cast<MINMAXINFO*>(lParam);
     if (minMax) {
-        SIZE minSize = GetWindowSizeForClient(hDlg, kCompactMinClientWidth, kCompactMinClientHeight);
+        const int minClientHeight = g_compactWithoutSpectrum
+            ? kCompactWithoutSpectrumClientHeight
+            : kCompactMinClientHeight;
+        SIZE minSize = GetWindowSizeForClient(hDlg, kCompactMinClientWidth, minClientHeight);
         minMax->ptMinTrackSize.x = minSize.cx;
         minMax->ptMinTrackSize.y = minSize.cy;
     }
@@ -937,12 +1072,16 @@ void CompactModeEnter(HWND hDlg)
 
     RECT rcWindow = {};
     GetWindowRect(hDlg, &rcWindow);
-    SIZE compactWindowSize = GetWindowSizeForClient(hDlg, kCompactClientWidth, kCompactClientHeight);
-    int x = rcWindow.left;
-    int y = rcWindow.top;
+    const int compactClientHeight = g_compactWithoutSpectrum
+        ? kCompactWithoutSpectrumClientHeight
+        : kCompactClientHeight;
+    SIZE compactWindowSize = GetWindowSizeForClient(hDlg, kCompactClientWidth, compactClientHeight);
+    int x = g_compactPositionSaved ? g_compactPosition.x : rcWindow.left;
+    int y = g_compactPositionSaved ? g_compactPosition.y : rcWindow.top;
     ClampWindowToWorkArea(x, y, compactWindowSize.cx, compactWindowSize.cy);
 
     g_viewMode = CompactViewMode::Compact;
+    SetShowCQTProcessingEnabled(!g_compactWithoutSpectrum);
     ResetCompactTitleScroll(std::wstring());
 
     SetWindowPos(hDlg, GetCompactZOrderAfterEnter(), x, y, compactWindowSize.cx, compactWindowSize.cy,
@@ -963,6 +1102,15 @@ void CompactModeExit(HWND hDlg)
     CompactModeEndDrag(hDlg);
     KillTimer(hDlg, IDT_COMPACT_TITLE_SCROLL);
 
+    RECT compactWindowRect = {};
+    if (GetWindowRect(hDlg, &compactWindowRect)) {
+        g_compactPositionSaved = true;
+        g_compactPosition = { compactWindowRect.left, compactWindowRect.top };
+        if (g_callbacks.rememberPosition) {
+            g_callbacks.rememberPosition(g_compactPosition.x, g_compactPosition.y);
+        }
+    }
+
     if (g_hCompactTitle) {
         ShowWindow(g_hCompactTitle, SW_HIDE);
     }
@@ -974,6 +1122,7 @@ void CompactModeExit(HWND hDlg)
     }
 
     g_viewMode = CompactViewMode::Normal;
+    SetShowCQTProcessingEnabled(true);
     SetCompactDwmShadow(hDlg, false);
 
     if (g_normalWindowStyle != 0) {
@@ -1029,6 +1178,40 @@ void CompactModeSetAlwaysOnTop(HWND hDlg, bool enabled)
 {
     g_compactAlwaysOnTop = enabled;
     CompactModeApplyZOrder(hDlg);
+}
+
+void CompactModeSetWithoutSpectrum(HWND hDlg, bool enabled)
+{
+    g_compactWithoutSpectrum = enabled;
+    if (!hDlg || !CompactModeIsActive()) {
+        return;
+    }
+
+    SetShowCQTProcessingEnabled(!g_compactWithoutSpectrum);
+
+    RECT rcWindow = {};
+    if (!GetWindowRect(hDlg, &rcWindow)) {
+        return;
+    }
+
+    const int compactClientHeight = g_compactWithoutSpectrum
+        ? kCompactWithoutSpectrumClientHeight
+        : kCompactClientHeight;
+    SIZE compactWindowSize = GetWindowSizeForClient(hDlg, kCompactClientWidth, compactClientHeight);
+    int x = rcWindow.left;
+    int y = rcWindow.top;
+    ClampWindowToWorkArea(x, y, compactWindowSize.cx, compactWindowSize.cy);
+
+    SetWindowPos(hDlg, nullptr, x, y, compactWindowSize.cx, compactWindowSize.cy,
+        SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+    CompactModeLayout(hDlg);
+    InvalidateRect(hDlg, nullptr, TRUE);
+}
+
+void CompactModeSetSavedPosition(bool saved, int x, int y)
+{
+    g_compactPositionSaved = saved;
+    g_compactPosition = { x, y };
 }
 
 void CompactModeBeginDrag(HWND hDlg)
@@ -1103,7 +1286,7 @@ static LRESULT CALLBACK CoverRendererSubclassProc(
 
     case WM_LBUTTONDOWN:
     {
-        DWORD now = GetTickCount();
+        DWORD now = (DWORD)GetTickCount64();
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         ClientToScreen(hWnd, &pt);
 
