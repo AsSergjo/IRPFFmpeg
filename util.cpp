@@ -2122,7 +2122,8 @@ void update_stream_metadata() {
 	//всё, что не нужно, удаляем
     std::vector<std::string> patterns = { "Now Playing: ",
                                           " *** www.ipmusic.ch",
-                                          "AutoDJ: "
+                                          "AutoDJ: ",
+                                          "-year"
                                         };
 
     remove_patterns(meta, patterns, true); // true — удалить все вхождения
@@ -2160,7 +2161,8 @@ void update_stream_metadata() {
         }
     }
 
-    PostIcyStationNameFromMetadata(meta_map);
+	//ищет название станции в метаданных и отправляет его в UI
+    //PostIcyStationNameFromMetadata(meta_map);
 
     // Function to find value by key (exact match)
     auto find_value = [&meta_map](const std::string& key) -> std::string {

@@ -34,7 +34,7 @@ Settings window: language selection, audio processing modules, tray behavior, co
 - work with M3U playlists;
 - add, delete, rename, save and switch stations from the interface;
 - show ICY/stream metadata and technical stream status;
-- automatically update the displayed station name from ICY metadata;
+- keep user-defined station names unchanged when stream metadata is updated;
 - handle problematic streams with corrupted or unstable audio more robustly;
 - search, download and cache cover art;
 - record the current broadcast to `Rec`;
@@ -64,7 +64,7 @@ It is better not to run `IRPFFmpeg.exe` directly: the main application needs lib
 Recommended download flow from GitHub Releases:
 
 1. Download the DLL support archive `IRPFFmpeg-support-win-x64.zip` once if you do not already have a `heap_dll` folder with third-party DLLs.
-2. Download the project archive for the current version, for example `IRPFFmpeg-v1.2.2-project-win-x64.zip`.
+2. Download the project archive for the current version, for example `IRPFFmpeg-v1.2.3-project-win-x64.zip`.
 3. Extract both archives into the same folder.
 4. Run `Start_IRPFFmpeg.exe`.
 

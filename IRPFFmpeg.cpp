@@ -46,14 +46,14 @@
 
 const int MAX_RECONNECT_ATTEMPTS = 3;
 const int RECONNECT_DELAY_MS = 2000;
-const wchar_t MAIN_WINDOW_TITLE[] = L"IRPffmpeg v1.2.2";
+const wchar_t MAIN_WINDOW_TITLE[] = L"IRPffmpeg v1.2.3";
 
 #define ID_TIMER_IMAGE_URL 3
 #define ID_TIMER_METADATA 4
 #define IDT_COVER_RESTORE 5
 #define IDT_TRACK_TOAST_HIDE 6
 static constexpr UINT kTrayIconId = 1;
-static constexpr int kTrackToastSize = 300;
+static constexpr int kTrackToastSize = 400;
 static constexpr int kTrackToastMargin = 18;
 static constexpr BYTE kTrackToastLayeredAlpha = 255;
 static constexpr UINT kTrackToastHideDelayMs = 5000;
@@ -82,7 +82,7 @@ static const std::wstring kPlaylistPlayingIcon = L"\u29BF ";
 std::atomic<bool> running(false);
 std::atomic_bool g_suppressFfmpegDecoderLog(false);
 std::atomic_bool g_audioStreamInfoAllowed(false);
-std::atomic_bool g_enableDebugLogFile(false);// true - включить логирование в файл debug.log, false - отключить
+std::atomic_bool g_enableDebugLogFile(false);// true - включить логирование в файл debug_log.txt, false - отключить
 std::string current_track;
 std::string current_metadata;
 std::mutex metadata_mutex;
@@ -1418,6 +1418,42 @@ void StopMetadataTimer();
 INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
+static void PositionPlayingStation(HWND hListView, int index)
+{
+    const int itemCount = hListView ? ListView_GetItemCount(hListView) : 0;
+    if (index < 0 || index >= itemCount) {
+        return;
+    }
+
+    ListView_EnsureVisible(hListView, index, FALSE);
+
+    const int topVisible = ListView_GetTopIndex(hListView);
+    if (topVisible < 0) {
+        return;
+    }
+
+    if (index > 0 && index == topVisible) {
+        SendMessageW(hListView, WM_VSCROLL, MAKEWPARAM(SB_LINEUP, 0), 0);
+        return;
+    }
+
+    if (index + 1 >= itemCount) {
+        return;
+    }
+
+    const int visibleCount = ListView_GetCountPerPage(hListView);
+    if (visibleCount <= 0) {
+        return;
+    }
+
+    const int bottomVisible = min(topVisible + visibleCount - 1, itemCount - 1);
+    if (index != bottomVisible) {
+        return;
+    }
+
+    SendMessageW(hListView, WM_VSCROLL, MAKEWPARAM(SB_LINEDOWN, 0), 0);
+}
+
 void UpdatePlayingIndicator(int oldIndex, int newIndex) {
     HWND hListView = GetDlgItem(g_hMainWnd, IDC_LIST_URL);
     const std::wstring playIcon = kPlaylistPlayingIcon;
@@ -1444,7 +1480,6 @@ void UpdatePlayingIndicator(int oldIndex, int newIndex) {
         if (currentText.rfind(playIcon, 0) != 0) {
             std::wstring newText = playIcon + text;
             ListView_SetItemText(hListView, newIndex, 0, (LPWSTR)newText.c_str());
-            ListView_EnsureVisible(hListView, newIndex, FALSE);
         }
     }
 }
@@ -1465,13 +1500,16 @@ void PlayAtIndex(int index, bool resetReconnect) {
     }
 
     const int oldPlayingIndex = g_currentlyPlayingIndex;
-    if (oldPlayingIndex != index &&
+    const bool stationChanged = oldPlayingIndex != index;
+    if (stationChanged &&
         oldPlayingIndex >= 0 &&
         oldPlayingIndex < static_cast<int>(playlist.size())) {
         g_previousStationIndex = oldPlayingIndex;
     }
 
-    UpdatePlayingIndicator(g_currentlyPlayingIndex, -1);
+    if (stationChanged) {
+        UpdatePlayingIndicator(oldPlayingIndex, -1);
+    }
 
     if (resetReconnect) {
         reconnect_attempts = 0;
@@ -1488,28 +1526,20 @@ void PlayAtIndex(int index, bool resetReconnect) {
         delete[] utf8;
     }
     // Update UI
-    UpdatePlayingIndicator(-1, index);
+    if (stationChanged) {
+        UpdatePlayingIndicator(-1, index);
+        ListView_SetItemState(hListView, index,
+            LVIS_SELECTED | LVIS_FOCUSED,
+            LVIS_SELECTED | LVIS_FOCUSED);
+        PositionPlayingStation(hListView, index);
+    }
     g_currentlyPlayingIndex = index;
-    g_nowPlayingTitle.clear();
+    // Preserve the last track title when the same stream is restarted.
+    // Identical metadata is not posted again until the station changes tracks.
+    if (stationChanged) {
+        g_nowPlayingTitle.clear();
+    }
     InvalidateNowPlayingBar(g_hMainWnd);
-    ListView_SetItemState(hListView, index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-
-    int itemCount = ListView_GetItemCount(hListView);
-    int topVisible = ListView_GetTopIndex(hListView);
-    int visibleCount = ListView_GetCountPerPage(hListView);
-    int bottomVisible = min(topVisible + visibleCount - 1, itemCount - 1);
-
-    if (index >= bottomVisible && index + 1 < itemCount) {
-        // Активная строка — последняя видимая снизу: показываем следующую
-        ListView_EnsureVisible(hListView, index + 1, FALSE);
-    }
-    else if (index <= topVisible && index - 1 >= 0) {
-        // Активная строка — первая видимая сверху: показываем предыдущую
-        ListView_EnsureVisible(hListView, index - 1, FALSE);
-    }
-    else {
-        ListView_EnsureVisible(hListView, index, FALSE);
-    }
    
 }
 
@@ -1517,11 +1547,25 @@ static void SetStationNameColumnWidth(HWND hListView)
 {
     if (!hListView) return;
 
+    const int topIndex = ListView_GetTopIndex(hListView);
+
     ListView_SetColumnWidth(hListView, 0, LVSCW_AUTOSIZE);
     int width = ListView_GetColumnWidth(hListView, 0) + 56;
     if (width < 204) width = 204;
     if (width > 274) width = 274;
     ListView_SetColumnWidth(hListView, 0, width);
+
+    const int currentTopIndex = ListView_GetTopIndex(hListView);
+    const UINT scrollCommand =
+        currentTopIndex < topIndex ? SB_LINEDOWN : SB_LINEUP;
+    for (int remaining =
+            topIndex > currentTopIndex
+                ? topIndex - currentTopIndex
+                : currentTopIndex - topIndex;
+        remaining > 0;
+        --remaining) {
+        SendMessageW(hListView, WM_VSCROLL, MAKEWPARAM(scrollCommand, 0), 0);
+    }
 }
 
 static HBITMAP CreateMenuGlyphBitmap(HWND hWnd, const wchar_t* glyph)
@@ -2928,6 +2972,7 @@ static void ReloadPlaylistFromM3U()
             if (foundIndex != -1) {
                 UpdatePlayingIndicator(prevIndexToRemove, foundIndex);
                 g_currentlyPlayingIndex = foundIndex;
+                PositionPlayingStation(hListView, foundIndex);
             }
             else {
                 UpdatePlayingIndicator(prevIndexToRemove, -1);
@@ -3432,19 +3477,12 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             if (selectedIndex < ListView_GetItemCount(hListView)) {
                 // Set selection and focus
                 ListView_SetItemState(hListView, selectedIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                // Ensure the selected item is visible
-                if (selectedIndex + 1 < ListView_GetItemCount(hListView) && selectedIndex != 0) {
-                    ListView_EnsureVisible(hListView, selectedIndex + 1, FALSE);
-                }
-                else {
-                    ListView_EnsureVisible(hListView, selectedIndex, FALSE);
-                }
-                 // Optionally, update the global playing index if you auto-play
+                // Optionally, update the global playing index if you auto-play
                 g_currentlyPlayingIndex = selectedIndex;
                 UpdatePlayingIndicator(-1, selectedIndex);
+                ListView_EnsureVisible(hListView, selectedIndex, FALSE);
             }
         }
-
         // Если нет названия станции или название станции = url,
         // пытаемся получить имя по url уже после того, как ListView полностью создан.
         StartPlaylistNameResolveThread();
@@ -3981,9 +4019,6 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                 else {
                     PlayAtIndex(0);
                 }
-
-				SetFocus(GetDlgItem(hDlg, IDC_LIST_URL));
-                
             }
             return (INT_PTR)TRUE;
         }
