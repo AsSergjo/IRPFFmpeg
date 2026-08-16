@@ -471,9 +471,9 @@ static bool TryBingImages(const std::wstring& trackName)
 
     /*std::string url = "https://www.bing.com/images/search?q=song%20cover%20" + encoded + "&form=HDRSC3&first=1&qft=+filterui:aspect-square";*/
 
-    std::string url = "https://www.bing.com/images/search?q=song%20cover%20"
+    std::string url = "https://www.bing.com/images/search?q=%2bsong%20cover%20'"
         + encoded +
-        "%20-site:youtube.com%20-site:pinterest.com&form=HDRSC3&first=1&qft=+filterui:aspect-square";
+        "'&form=HDRSC3&first=1&qft=+filterui:aspect-square";
 
     //LogToUI("BingImages for url: " + url);
 

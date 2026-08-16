@@ -3,8 +3,8 @@
 1 ICON "app.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,2,3,0
- PRODUCTVERSION 1,2,3,0
+ FILEVERSION 1,2,4,0
+ PRODUCTVERSION 1,2,4,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -21,11 +21,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "IRPFFmpeg"
             VALUE "FileDescription", "IRPFFmpeg launcher"
-            VALUE "FileVersion", "1.2.3"
+            VALUE "FileVersion", "1.2.4"
             VALUE "InternalName", "Start_IRPFFmpeg"
             VALUE "OriginalFilename", "Start_IRPFFmpeg.exe"
             VALUE "ProductName", "IRPFFmpeg"
-            VALUE "ProductVersion", "1.2.3"
+            VALUE "ProductVersion", "1.2.4"
         END
     END
     BLOCK "VarFileInfo"

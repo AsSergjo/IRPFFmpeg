@@ -46,7 +46,7 @@
 
 const int MAX_RECONNECT_ATTEMPTS = 3;
 const int RECONNECT_DELAY_MS = 2000;
-const wchar_t MAIN_WINDOW_TITLE[] = L"IRPffmpeg v1.2.3";
+const wchar_t MAIN_WINDOW_TITLE[] = L"IRPffmpeg v1.2.4";
 
 #define ID_TIMER_IMAGE_URL 3
 #define ID_TIMER_METADATA 4
@@ -57,6 +57,9 @@ static constexpr int kTrackToastSize = 400;
 static constexpr int kTrackToastMargin = 18;
 static constexpr BYTE kTrackToastLayeredAlpha = 255;
 static constexpr UINT kTrackToastHideDelayMs = 5000;
+static constexpr DWORD kDwmWindowCornerPreferenceAttribute = 33;
+static constexpr DWORD kDwmBorderColorAttribute = 34;
+static constexpr int kDwmCornerRound = 2; // DWMWCP_ROUND
 static const wchar_t TRACK_TOAST_CLASS[] = L"IRPFFmpegTrackToast";
 static const wchar_t TRACK_TOAST_TEXT_CLASS[] = L"IRPFFmpegTrackToastText";
 // ------------------------------- 
@@ -144,6 +147,7 @@ static std::mutex g_stopPlaybackMutex;
 static HFONT hButtonFont = NULL; // Font for button icons
 static HFONT hListboxFont = NULL; // Font for listbox items
 static HFONT hNowPlayingTitleFont = NULL;
+static HIMAGELIST g_hPlaylistRowHeightImageList = NULL;
 const int TITLE_HEIGHT = 0;
 extern const int alwaysVisibleExtent = 1024; // pixels
 extern const int maxVisibleExtent = 2048;    // pixels
@@ -176,11 +180,14 @@ static bool g_isInTray = false;
 static bool g_trayHideBalloonShown = false;
 static bool g_restoringFromTray = false;
 static bool g_minimizeToTrayFromCaptionButton = false;
+static HICON g_hAppIconBig = nullptr;
+static HICON g_hAppIconSmall = nullptr;
 static HWND g_hTrackToast = nullptr;
 static HWND g_hTrackToastText = nullptr;
 static std::wstring g_trackToastTitle;
 static SDL_Window* g_trackToastSdlWindow = nullptr;
 static SDL_Renderer* g_trackToastRenderer = nullptr;
+static bool g_trackToastUsesDwmBorder = false;
 static bool g_trackToastDragging = false;
 static POINT g_trackToastDragOffset = {};
 static UINT g_wmTaskbarCreated = 0;
@@ -392,6 +399,26 @@ static void ConfigureTrackToastLayeredWindow(HWND hWnd)
     }
 
     SetLayeredWindowAttributes(hWnd, 0, kTrackToastLayeredAlpha, LWA_ALPHA);
+
+    g_trackToastUsesDwmBorder = false;
+    BOOL compositionEnabled = FALSE;
+    if (SUCCEEDED(DwmIsCompositionEnabled(&compositionEnabled)) && compositionEnabled) {
+        const int cornerPreference = kDwmCornerRound;
+        const HRESULT cornerResult = DwmSetWindowAttribute(
+            hWnd,
+            kDwmWindowCornerPreferenceAttribute,
+            &cornerPreference,
+            sizeof(cornerPreference));
+
+        const COLORREF borderColor = RGB(190, 190, 190);
+        const HRESULT borderResult = DwmSetWindowAttribute(
+            hWnd,
+            kDwmBorderColorAttribute,
+            &borderColor,
+            sizeof(borderColor));
+
+        g_trackToastUsesDwmBorder = SUCCEEDED(cornerResult) && SUCCEEDED(borderResult);
+    }
 }
 
 static void RestartTrackToastHideTimer(HWND hWnd)
@@ -729,10 +756,12 @@ static void DrawTrackToast(HWND hWnd, HDC hdc)
         SDL_Rect overlayRect = { 0, 0, width, overlayHeight };
         SDL_RenderFillRect(g_trackToastRenderer, &overlayRect);
 
-        SDL_SetRenderDrawBlendMode(g_trackToastRenderer, SDL_BLENDMODE_NONE);
-        SDL_SetRenderDrawColor(g_trackToastRenderer, 190, 190, 190, 255);
-        SDL_Rect borderRect = { 0, 0, width - 1, height - 1 };
-        SDL_RenderDrawRect(g_trackToastRenderer, &borderRect);
+        if (!g_trackToastUsesDwmBorder) {
+            SDL_SetRenderDrawBlendMode(g_trackToastRenderer, SDL_BLENDMODE_NONE);
+            SDL_SetRenderDrawColor(g_trackToastRenderer, 190, 190, 190, 255);
+            SDL_Rect borderRect = { 0, 0, width - 1, height - 1 };
+            SDL_RenderDrawRect(g_trackToastRenderer, &borderRect);
+        }
 
         SDL_RenderPresent(g_trackToastRenderer);
     }
@@ -746,9 +775,11 @@ static void DrawTrackToast(HWND hWnd, HDC hdc)
         FillRect(hdc, &overlayRect, overlayBrush);
         DeleteObject(overlayBrush);
 
-        HBRUSH borderBrush = CreateSolidBrush(RGB(190, 190, 190));
-        FrameRect(hdc, &rc, borderBrush);
-        DeleteObject(borderBrush);
+        if (!g_trackToastUsesDwmBorder) {
+            HBRUSH borderBrush = CreateSolidBrush(RGB(190, 190, 190));
+            FrameRect(hdc, &rc, borderBrush);
+            DeleteObject(borderBrush);
+        }
     }
 
     LayoutTrackToastText(hWnd);
@@ -1414,6 +1445,80 @@ void StartPlaylistNameResolveThread();
 void StartMetadataTimer();
 void StopMetadataTimer();
 
+static void MatchPlaylistRowHeightToHistory(HWND hListView, HWND hHistory)
+{
+    if (!hListView || !hHistory || g_hPlaylistRowHeightImageList) {
+        return;
+    }
+
+    const LRESULT historyRowHeight = SendMessageW(hHistory, LB_GETITEMHEIGHT, 0, 0);
+    if (historyRowHeight == LB_ERR || historyRowHeight <= 0) {
+        return;
+    }
+
+    g_hPlaylistRowHeightImageList = ImageList_Create(
+        1, static_cast<int>(historyRowHeight), ILC_COLOR32, 1, 1);
+    if (g_hPlaylistRowHeightImageList) {
+        ListView_SetImageList(hListView, g_hPlaylistRowHeightImageList, LVSIL_SMALL);
+    }
+}
+
+static void FitPlaylistHeightToFiveRows(HWND hDlg, HWND hListView)
+{
+    if (!hDlg || !hListView || ListView_GetItemCount(hListView) <= 0) {
+        return;
+    }
+
+    RECT itemRect = {};
+    RECT listRect = {};
+    RECT listClientRect = {};
+    HWND hSpectrum = GetDlgItem(hDlg, IDC_STATIC_SDL);
+    HWND hNowPlayingBar = GetDlgItem(hDlg, IDC_STATIC_NOW_PLAYING_BAR);
+    RECT spectrumRect = {};
+    RECT nowPlayingRect = {};
+    if (!hSpectrum || !hNowPlayingBar ||
+        !ListView_GetItemRect(hListView, 0, &itemRect, LVIR_BOUNDS) ||
+        !GetWindowRect(hListView, &listRect) ||
+        !GetClientRect(hListView, &listClientRect) ||
+        !GetWindowRect(hSpectrum, &spectrumRect) ||
+        !GetWindowRect(hNowPlayingBar, &nowPlayingRect)) {
+        return;
+    }
+
+    MapWindowPoints(HWND_DESKTOP, hDlg, reinterpret_cast<POINT*>(&listRect), 2);
+    MapWindowPoints(HWND_DESKTOP, hDlg, reinterpret_cast<POINT*>(&spectrumRect), 2);
+    MapWindowPoints(HWND_DESKTOP, hDlg, reinterpret_cast<POINT*>(&nowPlayingRect), 2);
+
+    constexpr int kVisibleRows = 5;
+    const int rowHeight = itemRect.bottom - itemRect.top;
+    if (rowHeight <= 0) {
+        return;
+    }
+
+    const int currentListHeight = listRect.bottom - listRect.top;
+    const int listClientHeight = listClientRect.bottom - listClientRect.top;
+    const int nonClientHeight = currentListHeight - listClientHeight;
+    const int targetListHeight = itemRect.top + kVisibleRows * rowHeight + nonClientHeight;
+
+    constexpr int kInfoBarGap = 2;
+    const int gap = listRect.top - spectrumRect.bottom;
+    const int newListBottom = nowPlayingRect.top - kInfoBarGap;
+    const int newListTop = newListBottom - targetListHeight;
+    const int newSpectrumHeight = newListTop - gap - spectrumRect.top;
+    if (newSpectrumHeight <= 0) {
+        return;
+    }
+
+    SetWindowPos(hSpectrum, nullptr,
+        spectrumRect.left, spectrumRect.top,
+        spectrumRect.right - spectrumRect.left, newSpectrumHeight,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(hListView, nullptr,
+        listRect.left, newListTop,
+        listRect.right - listRect.left, targetListHeight,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 // Прототип функции обработки сообщений диалога
 INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
@@ -1868,7 +1973,7 @@ static void FillTrayIconData(HWND hWnd, NOTIFYICONDATAW& nid)
     nid.uID = kTrayIconId;
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = WM_APP_TRAY_ICON;
-    nid.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDI_IRPFFMPEG));
+    nid.hIcon = g_hAppIconSmall ? g_hAppIconSmall : g_hAppIconBig;
     wcscpy_s(nid.szTip, L"IRPffmpeg");
 }
 
@@ -2087,6 +2192,9 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
     {
     case WM_INITDIALOG:
     {
+        SendMessageW(hDlg, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(g_hAppIconBig));
+        SendMessageW(hDlg, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(g_hAppIconSmall));
+
         HWND hTooltip = CreateTooltipWindow(hDlg);
         AddTooltip(hTooltip, hDlg, GetDlgItem(hDlg, IDOK), Tr("tooltip.about.ok", L"Закрыть окно информации о программе"));
         return (INT_PTR)TRUE;
@@ -3290,6 +3398,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
 
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+
+    LoadIconMetric(
+        hInstance,
+        MAKEINTRESOURCEW(IDI_IRPFFMPEG),
+        LIM_LARGE,
+        &g_hAppIconBig);
+    LoadIconMetric(
+        hInstance,
+        MAKEINTRESOURCEW(IDI_IRPFFMPEG),
+        LIM_SMALL,
+        &g_hAppIconSmall);
    
     // Инициализация common controls
     INITCOMMONCONTROLSEX icc;
@@ -3300,7 +3419,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     g_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 
     DialogBox(hInstance, MAKEINTRESOURCE(IDD_MAIN_DIALOG), NULL, DialogProc);
-       
+
+    if (g_hAppIconSmall) {
+        DestroyIcon(g_hAppIconSmall);
+        g_hAppIconSmall = nullptr;
+    }
+    if (g_hAppIconBig) {
+        DestroyIcon(g_hAppIconBig);
+        g_hAppIconBig = nullptr;
+    }
+
     CloseHandle(hMutex);
 
     return 0;
@@ -3318,7 +3446,30 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
     switch (message)
     {
+    case WM_GETICON:
+    {
+        HICON hIcon = nullptr;
+        if (wParam == ICON_BIG) {
+            hIcon = g_hAppIconBig;
+        }
+        else if (wParam == ICON_SMALL || wParam == ICON_SMALL2) {
+            hIcon = g_hAppIconSmall;
+        }
+        if (hIcon) {
+            SetWindowLongPtrW(hDlg, DWLP_MSGRESULT, reinterpret_cast<LONG_PTR>(hIcon));
+            return (INT_PTR)TRUE;
+        }
+        break;
+    }
+
+    case WM_QUERYDRAGICON:
+        return reinterpret_cast<INT_PTR>(
+            g_hAppIconBig ? g_hAppIconBig : g_hAppIconSmall);
+
     case WM_INITDIALOG: {
+        SendMessageW(hDlg, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(g_hAppIconBig));
+        SendMessageW(hDlg, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(g_hAppIconSmall));
+
         InitializeLanguageSystem();
         av_log_set_level(AV_LOG_INFO);
         av_log_set_callback(FfmpegLogCallback);
@@ -3441,6 +3592,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         // Setup ListView
         HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
         SendMessage(hListView, WM_SETFONT, (WPARAM)hListboxFont, TRUE);
+        MatchPlaylistRowHeightToHistory(hListView, GetDlgItem(hDlg, IDC_LIST2));
         ListView_SetExtendedListViewStyle(hListView, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES);
         // Add columns
         LVCOLUMN lvc = { 0 };
@@ -3471,7 +3623,8 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         }
 		//ширина колонки с названием станции по содержимому
         SetStationNameColumnWidth(hListView);
-             
+        FitPlaylistHeightToFiveRows(hDlg, hListView);
+
         if (selectedIndex != -1) {
             // Make sure the index is valid
             if (selectedIndex < ListView_GetItemCount(hListView)) {
@@ -3744,7 +3897,14 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        PlaylistItem oldItem = playlist[payload->index];
         playlist[payload->index].name = payload->name;
+
+        if (!SavePlaylistToM3U(L"playlist.m3u", playlist)) {
+            playlist[payload->index] = std::move(oldItem);
+            return 0;
+        }
+        savePlaylistToDat(L"app.dat", playlist, g_currentlyPlayingIndex);
 
         HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
         if (!hListView) {
@@ -4300,6 +4460,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
 
             RECT rcContent = localRc;
             InflateRect(&rcContent, -6, -1);
+            OffsetRect(&rcContent, 0, -1);
 
             std::wstring barText = GetNowPlayingBarText();
 
@@ -4507,7 +4668,7 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
                         lplv->clrTextBk = RGB(255, 255, 255);
                     }
                     else {
-                        lplv->clrTextBk = RGB(240, 240, 240);
+                        lplv->clrTextBk = RGB(244, 249, 252);
                     }
                     
                     HWND hListView = GetDlgItem(hDlg, IDC_LIST_URL);
@@ -4715,6 +4876,10 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPara
         if (hButtonFont) DeleteObject(hButtonFont);
         if (hListboxFont) DeleteObject(hListboxFont);
         if (hNowPlayingTitleFont) DeleteObject(hNowPlayingTitleFont);
+        if (g_hPlaylistRowHeightImageList) {
+            ImageList_Destroy(g_hPlaylistRowHeightImageList);
+            g_hPlaylistRowHeightImageList = NULL;
+        }
         if (g_hbrBlack)  DeleteObject(g_hbrBlack);
 
         if (g_hVolumeButton) {

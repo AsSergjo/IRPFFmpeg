@@ -303,6 +303,30 @@ void DecodeHtmlNumericEntities(std::wstring& text)
     text.swap(result);
 }
 
+void RemoveUtf8BomBytes(std::string& text)
+{
+    static const std::string marker("\xEF\xBB\xBF", 3);
+    size_t pos = 0;
+    while ((pos = text.find(marker, pos)) != std::string::npos)
+        text.erase(pos, marker.size());
+}
+
+void RemoveByteOrderMarkArtifacts(std::wstring& text)
+{
+    text.erase(std::remove(text.begin(), text.end(), L'\uFEFF'), text.end());
+
+    static const std::wstring mojibake = L"\u00EF\u00BB\u00BF";
+    size_t pos = 0;
+    while ((pos = text.find(mojibake, pos)) != std::wstring::npos)
+        text.erase(pos, mojibake.size());
+}
+
+void FinalizeDecodedMetadata(std::wstring& text)
+{
+    DecodeHtmlNumericEntities(text);
+    RemoveByteOrderMarkArtifacts(text);
+}
+
 std::wstring TryRepairUtf8Mojibake(const std::wstring& decoded)
 {
     const int markerCount = CountUtf8MojibakeMarkers(decoded);
@@ -380,35 +404,40 @@ std::wstring DecodeMetadataToWideString(const std::string& str)
     if (str.empty())
         return std::wstring();
 
-    std::wstring decoded = DecodeTextWithCodepage(str, CP_UTF8, MB_ERR_INVALID_CHARS);
+    std::string cleaned = str;
+    RemoveUtf8BomBytes(cleaned);
+    if (cleaned.empty())
+        return std::wstring();
+
+    std::wstring decoded = DecodeTextWithCodepage(cleaned, CP_UTF8, MB_ERR_INVALID_CHARS);
     if (!decoded.empty()) {
         std::wstring repaired = TryRepairUtf8Mojibake(decoded);
         if (!repaired.empty()) {
-            DecodeHtmlNumericEntities(repaired);
+            FinalizeDecodedMetadata(repaired);
             return repaired;
         }
 
         repaired = TryRepairCp1251Mojibake(decoded);
         if (!repaired.empty()) {
-            DecodeHtmlNumericEntities(repaired);
+            FinalizeDecodedMetadata(repaired);
             return repaired;
         }
 
-        DecodeHtmlNumericEntities(decoded);
+        FinalizeDecodedMetadata(decoded);
         return decoded;
     }
 
-    decoded = DecodeSingleByteMetadata(str);
+    decoded = DecodeSingleByteMetadata(cleaned);
     if (!decoded.empty()) {
-        DecodeHtmlNumericEntities(decoded);
+        FinalizeDecodedMetadata(decoded);
         return decoded;
     }
 
     std::wstring fallback;
-    fallback.reserve(str.size());
-    for (char ch : str)
+    fallback.reserve(cleaned.size());
+    for (char ch : cleaned)
         fallback.push_back(static_cast<wchar_t>(static_cast<unsigned char>(ch)));
 
-    DecodeHtmlNumericEntities(fallback);
+    FinalizeDecodedMetadata(fallback);
     return fallback;
 }

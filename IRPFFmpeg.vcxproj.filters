@@ -87,12 +87,6 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <Image Include="small.ico">
-      <Filter>Файлы ресурсов</Filter>
-    </Image>
-    <Image Include="IRPFFmpeg.ico">
-      <Filter>Файлы ресурсов</Filter>
-    </Image>
     <Image Include="app.ico">
       <Filter>Файлы ресурсов</Filter>
     </Image>

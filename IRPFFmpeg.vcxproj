@@ -174,8 +174,6 @@
   </ItemGroup>
   <ItemGroup>
     <Image Include="app.ico" />
-    <Image Include="IRPFFmpeg.ico" />
-    <Image Include="small.ico" />
   </ItemGroup>
   <Target Name="CopyFfmpegDllsToHeapDll" AfterTargets="Build" Condition="'$(Platform)'=='x64' and Exists('$(FfmpegBinDir)')">
     <ItemGroup>

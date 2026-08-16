@@ -2123,7 +2123,8 @@ void update_stream_metadata() {
     std::vector<std::string> patterns = { "Now Playing: ",
                                           " *** www.ipmusic.ch",
                                           "AutoDJ: ",
-                                          "-year"
+                                          "-year",
+										  "Now Playing\\: "
                                         };
 
     remove_patterns(meta, patterns, true); // true — удалить все вхождения
@@ -2462,7 +2463,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
         GetCodecContextChannelLayout(codecCtx, &sourceInputLayout)) {
         sourceInputSampleRate = codecCtx->sample_rate;
         sourceInputSampleFormat = codecCtx->sample_fmt;
-        LogToUI("FFmpeg PlaybackLoop: fixed audio frame profile from codec context");
+        //LogToUI("FFmpeg PlaybackLoop: fixed audio frame profile from codec context");
     }
 
     auto reset_codec_error_storm = [&](std::chrono::steady_clock::time_point now) {
@@ -2613,7 +2614,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
             reset_input_profile_mismatch();
             reset_pending_input_params();
 
-            LogToUI("FFmpeg PlaybackLoop: stable audio frame profile accepted, swr configured");
+            //LogToUI("FFmpeg PlaybackLoop: stable audio frame profile accepted, swr configured");
             return true;
         };
 
@@ -3010,7 +3011,7 @@ void PlaybackLoop(AVFormatContext*& formatCtx,
                             decodedNow - playback_start >= kStablePlaybackBeforeReconnectReset) {
                             reconnect_attempts = 0;
                             reconnectAttemptsResetAfterStablePlayback = true;
-                            LogToUI("FFmpeg PlaybackLoop: stable decoded playback, reconnect counter reset");
+                            //LogToUI("FFmpeg PlaybackLoop: stable decoded playback, reconnect counter reset");
                         }
                         float* audio_data = (float*)converted_buffer;
                         int channels = pwfx->nChannels;

@@ -29,8 +29,6 @@ LANGUAGE LANG_RUSSIAN, SUBLANG_DEFAULT
 // remains consistent on all systems.
 IDI_IRPFFMPEG           ICON                    "app.ico"
 
-IDI_SMALL               ICON                    "small.ico"
-
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -38,8 +36,8 @@ IDI_SMALL               ICON                    "small.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,2,3,0
- PRODUCTVERSION 1,2,3,0
+ FILEVERSION 1,2,4,0
+ PRODUCTVERSION 1,2,4,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x3L
@@ -56,11 +54,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "IRPFFmpeg"
             VALUE "FileDescription", "IRPFFmpeg internet radio player"
-            VALUE "FileVersion", "1.2.3"
+            VALUE "FileVersion", "1.2.4"
             VALUE "InternalName", "IRPFFmpeg"
             VALUE "OriginalFilename", "IRPFFmpeg.exe"
             VALUE "ProductName", "IRPFFmpeg"
-            VALUE "ProductVersion", "1.2.3"
+            VALUE "ProductVersion", "1.2.4"
             VALUE "LegalCopyright", "Copyright (c) 2026"
         END
     END
@@ -116,11 +114,11 @@ END
 
 IDD_ABOUTBOX DIALOGEX 0, 0, 190, 78
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CLIPCHILDREN | WS_CAPTION | WS_SYSMENU
-CAPTION "IRPffmpeg v1.2.3"
+CAPTION "IRPffmpeg v1.2.4"
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
     ICON            IDI_IRPFFMPEG,IDC_STATIC,14,14,21,20
-    LTEXT           "IRPffmpeg v1.2.3",IDC_STATIC,42,14,130,8,SS_NOPREFIX
+    LTEXT           "IRPffmpeg v1.2.4",IDC_STATIC,42,14,130,8,SS_NOPREFIX
     LTEXT           "(c) 2026",IDC_STATIC,42,26,114,8
     CONTROL         "<a href=""https://github.com/AsSergjo/IRPFFmpeg"">GitHub repository</a>",IDC_ABOUT_GITHUB,
                     "SysLink",WS_TABSTOP,42,38,120,12
@@ -129,12 +127,12 @@ END
 
 IDD_MAIN_DIALOG DIALOGEX 0, 0, 693, 313
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_MINIMIZEBOX | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "IRPffmpeg v1.2.3"
+CAPTION "IRPffmpeg v1.2.4"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     CONTROL         "",IDC_STATIC_IMG,"Static",SS_OWNERDRAW | WS_BORDER,4,4,331,305
-    CTEXT           "",IDC_STATIC_SDL,338,4,351,96,NOT WS_GROUP
-    CONTROL         "",IDC_LIST_URL,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP,338,103,351,80,WS_EX_TRANSPARENT
+    CTEXT           "",IDC_STATIC_SDL,338,4,351,95,NOT WS_GROUP
+    CONTROL         "",IDC_LIST_URL,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER | LVS_SHAREIMAGELISTS | WS_BORDER | WS_TABSTOP,338,102,351,81,WS_EX_TRANSPARENT
     CONTROL         "",IDC_STATIC_NOW_PLAYING_BAR,"Static",SS_OWNERDRAW,338,183,351,16
     LISTBOX         IDC_LIST2,338,199,351,81,LBS_OWNERDRAWFIXED | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP
     CONTROL         "",IDC_BUTTON_VOLUME,"Button",BS_OWNERDRAW | WS_TABSTOP,359,282,30,30
@@ -256,7 +254,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APP_TITLE           "IRPffmpeg v1.2.3"
+    IDS_APP_TITLE           "IRPffmpeg v1.2.4"
     IDC_IRPFFMPEG           "IRPFFMPEG"
 END
 
