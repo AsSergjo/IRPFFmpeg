@@ -152,24 +152,27 @@ debug_log.txt
 Шаблон:
 
 ```markdown
-## IRPFFmpeg X.Y.Z
+## IRPffmpeg X.Y.Z
 
-### Что нового
+### What's new
 - ...
 
-### Исправления
+### Fixes
 - ...
 
-### Как запускать
-Для новой установки распакуйте `IRPFFmpeg-support-win-x64.zip` и `IRPFFmpeg-vX.Y.Z-project-win-x64.zip` в одну папку, затем запустите `Start_IRPFFmpeg.exe`.
+### Installation
+Download the archive with the required libraries:
+[IRPFFmpeg-support-win-x64.zip](https://github.com/AsSergjo/IRPFFmpeg/releases/download/v1.0.3/IRPFFmpeg-support-win-x64.zip)
 
-Для обновления существующей установки с уже установленным `heap_dll` распакуйте только project-архив поверх текущей папки.
+For a new installation, download the support archive from the link above and `IRPFFmpeg-vX.Y.Z-project-win-x64.zip` from the Assets section of this release. Extract both archives into the same folder, then run `Start_IRPFFmpeg.exe`.
 
-### Требования
+To update an existing installation that already contains `heap_dll`, extract only the project archive over the current folder.
+
+### Requirements
 - Windows 10/11 x64.
 
-### Известные ограничения
-- Лицензия FFmpeg зависит от конкретной сборки DLL.
+### Known limitations
+- The FFmpeg license depends on the specific DLL build.
 ```
 
 ## Проверка Перед Публикацией
